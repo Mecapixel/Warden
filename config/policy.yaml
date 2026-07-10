@@ -1,0 +1,147 @@
+# ==========================================================================
+# Warden — Agentic AI Gateway
+# policy.yaml — the declarative rule set the proxy enforces on every tool call
+# ==========================================================================
+#
+# Every tool call an agent makes flows through the proxy and is evaluated
+# against this file. The proxy returns one of four decisions:
+#
+#   allow    — forward the call to the real MCP server unchanged
+#   redact   — forward, but strip sensitive data from args and/or the response
+#   escalate — pause and require a human yes/no before forwarding
+#   deny     — block the call, return a safe error to the agent
+#
+# Design principle: DENY BY DEFAULT. A tool or path not explicitly allowed
+# here is denied. This is the core of zero-trust: nothing is permitted until
+# a rule permits it.
+# ==========================================================================
+
+version: 1
+
+# --------------------------------------------------------------------------
+# Enforcement mode. `enforce` blocks; `monitor` computes and audits every
+# decision identically but lets execution proceed (the standard rollout path:
+# observe, tune, then flip to enforce). Explicit here so nobody has to read
+# source to learn the gateway's most consequential setting.
+# --------------------------------------------------------------------------
+mode: enforce
+
+# --------------------------------------------------------------------------
+# Execution watchdog. A forwarded tool call that has not answered within this
+# deadline is abandoned: the client receives a synthesized timeout error, the
+# abandonment is audited, and any LATE reply from the server is dropped on
+# arrival (never forwarded, never uninspected).
+# --------------------------------------------------------------------------
+execution:
+  timeout_seconds: 30
+
+# --------------------------------------------------------------------------
+# Workspace root. Every filesystem path an agent requests is canonicalized
+# (symlinks, .., hard links all resolved to an absolute path) and must fall
+# strictly inside this directory, or the call is denied. This single rule is
+# the primary defense against path-traversal attacks like ../../etc/passwd.
+# --------------------------------------------------------------------------
+workspace_root: "/safe/workspace"
+
+# --------------------------------------------------------------------------
+# Tool allowlist registry. If this list is non-empty, ONLY tools named here
+# may run at all — least privilege at the registry level, on top of per-tool
+# tiers below. Anything not listed is denied (rule REG-001). Leave empty to
+# let the `tools:` map be the sole authority (deny-by-default still applies).
+# --------------------------------------------------------------------------
+tool_registry:
+  - read_file
+  - list_directory
+  - write_file
+  - delete_file
+
+# --------------------------------------------------------------------------
+# Tool tiers. Each tool the agent may call is assigned a tier that sets its
+# default decision. This is the asymmetric-approval model: reads run freely,
+# mutations require a human. A tool not listed here is denied by default.
+# --------------------------------------------------------------------------
+# Each tool may declare `path_args`: the exact argument names that carry
+# filesystem paths, so the policy — not a hardcoded guess list — is the
+# authority on what gets canonicalized. Tools that omit path_args fall back
+# to the default key list (path, file, filename, directory, dir).
+tools:
+  read_file:
+    tier: auto            # allow automatically
+    inspect_response: true # scan returned data before handing to the agent
+    path_args: [path]
+
+  list_directory:
+    tier: auto
+    inspect_response: true
+    path_args: [path]
+
+  write_file:
+    tier: escalate        # requires human approval before forwarding
+    inspect_args: true
+    path_args: [path]
+
+  delete_file:
+    tier: escalate
+    path_args: [path]
+
+  # Example of a tool that is defined but hard-denied for now. Shell-style
+  # tools are the highest RCE risk; keep them denied until argument
+  # parameterization and canonicalization are proven in tests.
+  run_command:
+    tier: deny
+
+# --------------------------------------------------------------------------
+# Redaction. Patterns matched here are stripped from BOTH directions:
+# arguments going to a tool, and data coming back to the agent's context.
+# This prevents secrets and PII from leaking into tool calls or model memory.
+# The named detectors map to implementations in proxy/inspect/redactor.py.
+# --------------------------------------------------------------------------
+redaction:
+  enabled: true
+  detectors:
+    - api_keys          # high-entropy tokens, common key prefixes
+    - aws_keys          # AKIA..., secret access keys
+    - private_keys      # -----BEGIN ... PRIVATE KEY-----
+    - emails
+    - ssn
+    - credit_cards
+  # When a CREDENTIAL (aws_keys, private_keys, api_keys) is found in a tool
+  # ARGUMENT, block the whole call — an agent moving a live credential is
+  # itself a signal worth stopping. PII detectors (emails, ssn, credit_cards)
+  # do NOT hard-block: they add risk and are surfaced to the human at the
+  # tier gate, because legitimate work routinely mentions an email address.
+  block_secrets_in_args: true
+
+# --------------------------------------------------------------------------
+# Egress allowlist. DENY BY DEFAULT: with `enabled: true` and an empty
+# allowed_hosts list, NO network destination is permitted until one is added
+# here — which is the correct starting posture for a zero-trust gateway. An
+# injected instruction that steers the agent still has to move data OFF the
+# machine; unlisted hosts die at this check. Wildcards: '*.example.com'
+# allows subdomains but NOT example.com itself (list it separately).
+# --------------------------------------------------------------------------
+egress:
+  enabled: true
+  allowed_hosts: []
+  # allowed_hosts:
+  #   - api.github.com
+  #   - "*.internal.example.com"
+
+# --------------------------------------------------------------------------
+# Inbound tool-data inspection. Data returned FROM a tool (a scraped page,
+# an email body, a file's contents) is untrusted and may contain hidden
+# instructions aimed at the agent ("ignore previous instructions..."). The
+# inspector flags these before the data reaches the agent's context window.
+# In v1 this flags-and-annotates; escalation/stripping is configurable.
+# --------------------------------------------------------------------------
+inbound_inspection:
+  enabled: true
+  on_injection_detected: escalate   # allow | annotate | escalate | deny
+
+# --------------------------------------------------------------------------
+# Audit. Every decision is written to an append-only, hash-chained log so the
+# record is tamper-evident: altering any entry breaks the chain.
+# --------------------------------------------------------------------------
+audit:
+  enabled: true
+  path: "audit/warden_audit.db"
