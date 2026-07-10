@@ -31,7 +31,7 @@ untrusted actor and the sensitive resource, and log everything, tamper-evidently
 
 ## What's built (v1 + v1.5.1)
 
-A working runtime, proven by a 167-test synthetic attack and fuzz suite:
+A working runtime, proven by a 172-test synthetic attack, fuzz, and performance suite:
 
 - **Path canonicalization** — blocks `../../etc/passwd`, absolute-path escapes,
   and symlink escapes; everything is confined to a workspace root.
@@ -114,7 +114,7 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (167 passing tests):** the full v1 pipeline — request
+**Built and tested (172 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
@@ -131,7 +131,9 @@ top-level JSON) now locked in by a fail-closed line parser.
 safe-exec guard waits, armed). The inbound-injection scanner is a regex
 heuristic — a first-pass filter, not a classifier; that upgrade is v2, and
 detection is defense-in-depth either way: the policy layer is the control
-that prevents harm. Next up: a measured performance budget, audit telemetry derived
+that prevents harm. Measured overhead is published in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): ≈ 2 ms per mediated tool call
+end to end, deny path effectively free. Next up: audit telemetry derived
 from the log, and an optional Presidio detector backend.
 
 ## License

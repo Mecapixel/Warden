@@ -3,6 +3,25 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.3] — 2026-07-10
+
+The performance budget: Warden's overhead is now a published,
+regression-tracked number. Measured median overhead per mediated tool call:
+**≈ 2 ms** end to end over real pipes, with sub-0.1 ms policy evaluation and
+the deny path effectively free (0.004 ms) — deny-by-default costs nothing.
+
+### Added
+- `benchmarks/bench.py`: measures every pipeline stage (normalize, policy
+  allow/deny, full mediation, audit write) at median/P95/P99 over 2,000
+  iterations, plus live transport round-trip overhead against the fake MCP
+  server over real pipes, plus peak RSS. `--json` output for tracking.
+- `docs/PERFORMANCE.md`: published reference numbers with methodology and
+  interpretation.
+- `tests/test_performance.py` (5 tests): generous regression ceilings so an
+  accidental O(n^2) in the hot path fails CI instead of shipping, including
+  an invariant that the deny path never becomes anomalously slower than the
+  allow path.
+
 ## [1.5.2] — 2026-07-10
 
 Fuzz and property testing of the Normalize boundary — the first trust
