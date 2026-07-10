@@ -3,6 +3,35 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.2] — 2026-07-10
+
+Fuzz and property testing of the Normalize boundary — the first trust
+boundary in the pipeline, so it deserves abuse. The suite immediately earned
+its keep: it found two ways a hostile peer could crash the relay.
+
+### Added
+- Hypothesis-driven fuzz/property suite (`tests/test_fuzz_normalize.py`,
+  19 tests): random Unicode including lone surrogates, controls, bidi and
+  zero-width characters; malformed structures; deep nesting; null bytes;
+  huge strings.
+- Invariants proven as properties: `harden()` is total, deterministic,
+  idempotent, and its output is free of invisibles, hidden controls, null
+  bytes, and mapped homoglyphs; `Request.normalize()` is total, never
+  mutates its input, and its inspection view is itself fully hardened;
+  `parse_jsonrpc_line()` never raises and only returns a dict or None.
+- `hypothesis` added to requirements.
+
+### Fixed
+- **Relay crash vectors found by the fuzz suite.** The transport pumps
+  guarded only `json.JSONDecodeError`, so a deeply nested line
+  (`'[' * 100000`) escaped as `RecursionError`, and valid non-object JSON
+  (`[1,2,3]`) crashed the server pump with `AttributeError` on `.get()`.
+  Either one killed the mediation relay — an availability attack against
+  the security layer itself. Both pumps now parse through a fail-closed
+  `parse_jsonrpc_line()` that returns a dict or None, never an exception;
+  hostile lines are dropped and the relay keeps running.
+
+
 ## [1.5.1] — 2026-07-08
 
 The release-defining feature of the Registry Hardening phase:

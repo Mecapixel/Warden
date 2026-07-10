@@ -38,6 +38,25 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from proxy.core.mission import Mission
+
+
+def parse_jsonrpc_line(line: str | bytes) -> dict | None:
+    """Fail-closed parse of one newline-delimited JSON-RPC line.
+
+    Returns a dict, or None for anything else — malformed JSON, valid JSON
+    whose top level is not an object (a list/str/number has no JSON-RPC
+    meaning here), pathological nesting deep enough to exhaust the parser
+    (RecursionError), or undecodable bytes. The relay pumps drop None and
+    keep running: a hostile peer must never be able to crash the mediator
+    with a crafted line. Found and locked in by the v1.5.2 fuzz suite.
+    """
+    try:
+        msg = json.loads(line)
+    except (ValueError, RecursionError, UnicodeDecodeError):
+        # ValueError covers json.JSONDecodeError; RecursionError covers
+        # deep-nesting bombs like '[' * 100_000.
+        return None
+    return msg if isinstance(msg, dict) else None
 from proxy.runtime.mediator import Mediator
 from proxy.runtime.pinning import ToolRegistry, PinVerdict
 
@@ -316,10 +335,9 @@ class MCPProxy:
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # not a JSON-RPC message; drop
+                msg = parse_jsonrpc_line(line)
+                if msg is None:
+                    continue  # not a JSON-RPC object; drop, never crash
                 # Mediation runs on a worker thread. The approval gate can
                 # block for up to its full timeout waiting on a human at
                 # /dev/tty; running it on the loop thread would freeze the
@@ -343,10 +361,9 @@ class MCPProxy:
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+                msg = parse_jsonrpc_line(line)
+                if msg is None:
+                    continue  # not a JSON-RPC object; drop, never crash
                 request_id = msg.get("id")
                 pending = self.interceptor.pending.get(request_id)
                 if pending and pending.deadline_handle:

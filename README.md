@@ -31,7 +31,7 @@ untrusted actor and the sensitive resource, and log everything, tamper-evidently
 
 ## What's built (v1 + v1.5.1)
 
-A working runtime, proven by a 148-test synthetic attack suite:
+A working runtime, proven by a 167-test synthetic attack and fuzz suite:
 
 - **Path canonicalization** — blocks `../../etc/passwd`, absolute-path escapes,
   and symlink escapes; everything is confined to a workspace root.
@@ -114,13 +114,16 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (148 passing tests):** the full v1 pipeline — request
+**Built and tested (167 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
 transport with watchdog and fail-closed guarantees, the minimal egress
 allowlist, the human approval gate, monitor mode — plus v1.5.1
-tool-definition pinning with drift detection and reapproval.
+tool-definition pinning with drift detection and reapproval, and v1.5.2
+Hypothesis fuzz and property testing of the Normalize boundary — which found
+and fixed two relay-crash vectors (deep-nesting JSON bombs, non-object
+top-level JSON) now locked in by a fail-closed line parser.
 `python demo.py` exercises the decision core end to end;
 `tests/test_transport.py` proves the full story over real pipes.
 
@@ -128,9 +131,8 @@ tool-definition pinning with drift detection and reapproval.
 safe-exec guard waits, armed). The inbound-injection scanner is a regex
 heuristic — a first-pass filter, not a classifier; that upgrade is v2, and
 detection is defense-in-depth either way: the policy layer is the control
-that prevents harm. Next up: Hypothesis fuzz and property testing of the
-Normalize boundary, a measured performance budget, audit telemetry, and an
-optional Presidio detector backend.
+that prevents harm. Next up: a measured performance budget, audit telemetry derived
+from the log, and an optional Presidio detector backend.
 
 ## License
 
