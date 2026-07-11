@@ -30,7 +30,7 @@ from proxy.core.decision import Decision, Verdict
 from proxy.core.metrics import SecurityMetrics
 from proxy.policy.engine import PolicyEngine
 from proxy.audit.log import AuditLog
-from proxy.inspect import inbound, redactor
+from proxy.inspect import inbound, redactor, threats
 from proxy.runtime.approval import ApprovalGate
 
 
@@ -157,13 +157,17 @@ class Mediator:
                                       parent_event_id=parent_event_id)
 
             if rp.get("inbound_inspection"):
-                signals = inbound.inspect(text)
+                # v1 heuristics plus the v2 expanded detector battery (role
+                # confusion, jailbreak, hidden unicode, markup abuse, context
+                # abuse). All defense-in-depth: signals, never verdicts —
+                # policy decides. A missed signal still meets the v1 wall.
+                signals = inbound.inspect(text) + threats.inspect_expanded(text)
                 if signals:
                     action = (self.engine.policy.get("inbound_inspection", {})
                               .get("on_injection_detected", "escalate"))
                     top = max(signals, key=lambda s: s.severity)
                     self.audit.record(tool, "INJECTION_SIGNAL",
-                                      f"indirect-injection heuristic fired ({len(signals)} signal(s))",
+                                      f"injection/adversarial heuristic fired ({len(signals)} signal(s))",
                                       {"top_pattern": top.pattern, "severity": top.severity,
                                        "action": action},
                                       parent_event_id=parent_event_id)

@@ -36,7 +36,7 @@ class InjectionSignal:
 # Instruction-override and role-switch phrasings commonly used in injections.
 _OVERRIDE_PATTERNS = [
     (r"ignore (?:all |any )?(?:previous|prior|above) instructions", 0.9),
-    (r"disregard (?:the )?(?:previous|prior|system) (?:instructions|prompt|rules)", 0.9),
+    (r"disregard (?:the )?(?:previous|prior|system|above)(?: system| prior| previous)? (?:instructions|prompt|rules|directives?)", 0.9),
     (r"you are now (?:in )?(?:developer|admin|god|dan) mode", 0.85),
     (r"(?:new|updated) (?:system )?(?:instructions|directive)s?:", 0.7),
     (r"do not (?:tell|inform|alert) (?:the )?(?:user|human|operator)", 0.8),

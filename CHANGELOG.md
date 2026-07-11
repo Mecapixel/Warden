@@ -3,6 +3,45 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.0] — 2026-07-11
+
+**v2 — Model Security.** Defense-in-depth on top of v1 enforcement: expanded
+adversarial-content detection, structural validation of tool calls, and a
+MEASURED false-negative posture — every classifier scored against a labeled
+attack corpus, miss rates published per class. Unmeasured detection is
+unaccountable detection.
+
+### Added
+- `proxy/inspect/threats.py`: expanded detectors — role confusion (fake
+  system/assistant turns, chat-template tokens), jailbreak scaffolds
+  (DAN, developer-mode, "hypothetically"), hidden Unicode (Tags block,
+  private-use, bidi override, invisible-character density), markup/HTML
+  smuggling, and context-window abuse (oversized payloads, token flooding,
+  excessive entropy). All emit the same `InjectionSignal` shape the v1
+  inspector uses, so mediator/audit/policy need no changes.
+- `proxy/inspect/schema.py`: JSON-Schema validation of tool CALLS and tool
+  OUTPUTS. A `args_schema` declared on a tool means a call with the wrong
+  structure is denied (rule SCHEMA-001) — deny-by-default stops unknown
+  tools; this stops known tools invoked with a malformed shape. Dependency-
+  free built-in validator covers the practical subset; the optional
+  `jsonschema` package is used automatically if installed, never required.
+- `proxy/inspect/evaluate.py` + `tests/corpus/attacks.py`: the measured
+  posture harness. Runs every detector against 28 labeled synthetic attacks
+  across six classes plus 10 benign decoys, reporting per-class recall, miss
+  rate, and false positives. `python -m proxy.inspect.evaluate`.
+- `docs/DETECTION_POSTURE.md`: published reference numbers and methodology —
+  100% recall on the corpus, 0 false positives — with an explicit statement
+  of what the measurement does and does not claim.
+- v2 detectors wired into the mediator response path alongside the v1
+  heuristics; `tests/test_v2_model_security.py` (23 tests) enforces a
+  recall floor of 0.90 and zero benign false positives as a build gate.
+
+### Fixed
+- Detection gap found by the new posture harness on first run: an
+  instruction-override phrasing with an intervening qualifier ("disregard
+  the prior system prompt and follow these rules") slipped the v1 pattern.
+  Pattern tightened; case pinned in the corpus.
+
 ## [1.5.5] — 2026-07-10
 
 Optional Presidio detector backend — v1.5 phase complete.

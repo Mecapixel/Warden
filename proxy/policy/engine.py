@@ -177,6 +177,25 @@ class PolicyEngine:
                 request_id=request.request_id,
             )
 
+        # 2b. v2: JSON-Schema tool-call validation. If policy declares an
+        # `args_schema` for this tool, a call whose arguments don't conform is
+        # a structural anomaly — deny it. Deny-by-default already stops unknown
+        # tools; this stops KNOWN tools invoked with the wrong shape (a probe
+        # for a parser bug, or an agent confused into a malformed call).
+        arg_schema = spec.get("args_schema")
+        if arg_schema:
+            from proxy.inspect.schema import check_tool_call
+            violation = check_tool_call(args, arg_schema)
+            if violation:
+                risk.add("schema_violation",
+                         f"tool-call arguments failed schema: {violation.detail}")
+                return Decision.from_risk(
+                    Verdict.DENY, rule="SCHEMA-001", action=tool, assessment=risk,
+                    reason=f"Tool call arguments did not conform to the declared schema.",
+                    recommended_fix="Correct the argument structure, or adjust args_schema in policy.yaml.",
+                    request_id=request.request_id,
+                )
+
         # 3. Path containment for path-bearing arguments. The tool's policy may
         # declare exactly which args carry paths (`path_args`); the default key
         # list is only a fallback for tools that do not declare.
