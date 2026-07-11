@@ -80,13 +80,35 @@ def _validate_policy(policy: Any) -> dict:
     registry = policy.get("tool_registry", [])
     if registry is not None and not isinstance(registry, list):
         raise PolicyValidationError("policy.yaml: 'tool_registry' must be a list")
+
+    # v1.5.5: if the policy explicitly enables the presidio detector, the
+    # backend must actually load. A security tool must never quietly
+    # downgrade to weaker detection than the operator configured.
+    redaction = policy.get("redaction", {}) or {}
+    detectors = redaction.get("detectors") or []
+    if "presidio" in detectors:
+        from proxy.inspect.presidio_backend import available
+        ok, why = available()
+        if not ok:
+            raise PolicyValidationError(
+                "policy.yaml: redaction.detectors includes 'presidio' but the "
+                f"backend cannot load ({why}). Install it with "
+                "'pip install presidio-analyzer' plus a spaCy model, or remove "
+                "'presidio' from the detector list."
+            )
     return policy
 
 
 class PolicyEngine:
     def __init__(self, policy_path: str):
         with open(policy_path) as fh:
-            self.policy = _validate_policy(yaml.safe_load(fh))
+            try:
+                loaded = yaml.safe_load(fh)
+            except yaml.YAMLError as exc:
+                raise PolicyValidationError(
+                    f"policy file is not valid YAML ({policy_path}): {exc}"
+                ) from exc
+        self.policy = _validate_policy(loaded)
         self.workspace_root = self.policy["workspace_root"]
         self.tools = self.policy.get("tools", {})
         self.redaction_cfg = self.policy.get("redaction", {})

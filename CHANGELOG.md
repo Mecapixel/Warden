@@ -3,6 +3,76 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.5] — 2026-07-10
+
+Optional Presidio detector backend — v1.5 phase complete.
+
+### Added
+- `proxy/inspect/presidio_backend.py`: opt-in adapter for richer PII
+  detection (emails, phone numbers, national IDs, credit cards, IPs) behind
+  the existing detector interface. Findings arrive in the same `Finding`
+  shape with namespaced names (`presidio_email_address`, ...), so
+  `redact()` and policy code work unchanged. Regex + entropy remain the
+  always-on lightweight default; enabling presidio only ever ADDS findings.
+- Enable with `redaction.detectors: [..., presidio]`;
+  `pip install presidio-analyzer` plus a spaCy model. Zero import cost when
+  not enabled.
+- Fail loud, not silently weaker: policy validation rejects a policy that
+  enables `presidio` when the backend cannot load — a security tool must
+  never quietly downgrade the detection the operator configured. Also
+  hardened against spaCy's model auto-downloader raising `SystemExit`.
+- 8 tests (live-analysis tests skip cleanly when the optional dependency is
+  absent; the fail-loud contract is tested everywhere).
+
+### Fixed
+- **`harden()` was not idempotent** — found in the field by the v1.5.2
+  property suite (idempotence invariant) on a separate machine's fuzz run:
+  an invisible character between a base letter and a combining mark blocks
+  NFKC composition on the first pass; stripping the invisible then makes
+  them adjacent, so a second pass composes them and the output changes
+  ('a'+ZWSP+U+0308 -> 'a'+U+0308 -> 'ä'). A normalizer that changes on
+  re-application is an evasion seam. `harden()` now iterates its pipeline to
+  a fixpoint (bounded), and the exact payload class is pinned as a
+  permanent regression test.
+
+- **Windows: fake MCP server misdispatched canonical paths** — the test
+  server extracted basenames with a '/'-only split, so Warden's canonical
+  Windows paths (backslash separators) fell through to the generic handler
+  and the redaction end-to-end test failed on Windows/Python 3.14. Fixed
+  with a separator-agnostic basename; verified on Windows and Linux.
+
+- **Windows: Warden's own generated policies were invalid YAML** — found in
+  the field on Windows/Python 3.14 by the v1.5.4 CLI tests. Both the
+  deny-all fallback and the `warden init` starter embedded OS-native paths
+  in DOUBLE-quoted YAML scalars; in double-quoted YAML a backslash starts an
+  escape sequence, so `C:\Users\...` produced a scanner error and Warden
+  could not read the policy it had just written. Templates now use
+  single-quoted scalars (backslash-literal by the YAML spec) and paths are
+  emitted in POSIX form, valid on every OS. Additionally: a policy file
+  that is not valid YAML now raises a clear `PolicyValidationError` instead
+  of a raw scanner traceback, `warden stats --audit <path>` no longer
+  touches any policy file at all, the generated fallback policy is
+  gitignored, and the whole bug class is pinned by a parametrized
+  regression suite (`tests/test_policy_paths.py`, 8 tests).
+
+## [1.5.4] — 2026-07-10
+
+Audit telemetry: the forensic log becomes an operational dashboard, with no
+second bookkeeping system that could disagree with the tamper-evident record.
+The log IS the source of truth; telemetry is a strictly read-only view.
+
+### Added
+- `proxy/audit/telemetry.py`: derives, from the audit log alone —
+  allow/deny/escalate counts (normalized across writers), decisions by tool,
+  highest-risk tools (average and max risk per tool), rule frequency,
+  watchdog timeouts, injection detections, traversal attempts, secret
+  blocks, egress denials, pinning events, and overall average risk.
+- `warden stats` CLI command: rendered table or `--json` for tracking,
+  `--top N` to bound listings, works against an explicit `--audit` path
+  with no policy file present.
+- 11 tests, including chain-intact-after-read verification and graceful
+  handling of malformed detail rows.
+
 ## [1.5.3] — 2026-07-10
 
 The performance budget: Warden's overhead is now a published,

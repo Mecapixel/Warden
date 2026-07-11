@@ -47,17 +47,32 @@ _HOMOGLYPHS = str.maketrans({
 
 
 def harden(text: str) -> str:
-    """Return the inspection-safe form of text. Idempotent."""
+    """Return the inspection-safe form of text. A true fixpoint: the pipeline
+    repeats until the output stops changing, because a single pass is NOT
+    idempotent — an invisible character between a base letter and a combining
+    mark blocks NFKC composition on the first pass, then stripping makes them
+    adjacent and a second pass composes them ('a'+ZWSP+U+0308 -> 'a'+U+0308
+    -> 'ä'). Found by the v1.5.2 property suite (idempotence invariant); a
+    normalizer that changes on re-application is an evasion seam, so we
+    iterate to stability. Converges in 2 passes for real text; the bound is
+    defensive.
+    """
     if not text:
         return text
-    out = unicodedata.normalize("NFKC", text)
-    out = "".join(ch for ch in out if ch not in _INVISIBLES)
-    # Drop remaining non-printable control/format characters (keep \n \t \r).
-    out = "".join(
-        ch for ch in out
-        if ch in "\n\t\r" or unicodedata.category(ch) not in ("Cf", "Cc")
-    )
-    return out.translate(_HOMOGLYPHS)
+    out = text
+    for _ in range(6):
+        prev = out
+        out = unicodedata.normalize("NFKC", out)
+        out = "".join(ch for ch in out if ch not in _INVISIBLES)
+        # Drop remaining non-printable control/format characters (keep \n \t \r).
+        out = "".join(
+            ch for ch in out
+            if ch in "\n\t\r" or unicodedata.category(ch) not in ("Cf", "Cc")
+        )
+        out = out.translate(_HOMOGLYPHS)
+        if out == prev:
+            break
+    return out
 
 
 def was_obfuscated(original: str, hardened: str) -> bool:

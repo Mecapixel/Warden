@@ -93,6 +93,21 @@ class TestHardenProperties:
         once = harden(s)
         assert harden(once) == once
 
+    def test_idempotence_regression_invisible_splits_combining_mark(self):
+        # Pinned falsifying example found by this suite in the field
+        # (v1.5.3-era): an invisible between a base letter and a combining
+        # mark blocked NFKC composition on pass one; the old single-pass
+        # harden() then returned text that CHANGED when hardened again.
+        s = "a\u200b\u0308"          # 'a' + ZWSP + combining diaeresis
+        once = harden(s)
+        assert once == "\u00e4"       # composes fully in one call now
+        assert harden(once) == once
+        # Same class, other invisibles and marks:
+        for inv in ("\u200d", "\ufeff", "\u2060"):
+            for mark in ("\u0301", "\u0327"):
+                t = "e" + inv + mark
+                assert harden(harden(t)) == harden(t)
+
     @settings(max_examples=300, deadline=None)
     @given(hostile_text)
     def test_output_contains_no_invisibles(self, s):

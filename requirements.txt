@@ -4,6 +4,6 @@ pyyaml
 pytest
 hypothesis
 # Added per phase, only when earned:
-#   presidio-analyzer, presidio-anonymizer   (v1.5 richer PII, optional)
+#   presidio-analyzer + a spaCy model        (v1.5.5 richer PII — OPTIONAL, shipped)
 #   jsonschema                               (v2 tool-call validation)
 #   redis                                    (v3 rate limiting / state)

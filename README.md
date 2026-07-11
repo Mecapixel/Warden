@@ -31,7 +31,7 @@ untrusted actor and the sensitive resource, and log everything, tamper-evidently
 
 ## What's built (v1 + v1.5.1)
 
-A working runtime, proven by a 172-test synthetic attack, fuzz, and performance suite:
+A working runtime, proven by a 200-test synthetic attack, fuzz, and performance suite:
 
 - **Path canonicalization** — blocks `../../etc/passwd`, absolute-path escapes,
   and symlink escapes; everything is confined to a workspace root.
@@ -69,6 +69,13 @@ A working runtime, proven by a 172-test synthetic attack, fuzz, and performance 
   detection.
 - **Tamper-evident audit log** — hash-chained record of every decision,
   independently verifiable with `warden verify`.
+- **Audit telemetry** — `warden stats` derives operational metrics straight
+  from the forensic log (verdict counts, highest-risk tools, rule frequency,
+  watchdog/injection/traversal counters): one source of truth, read-only.
+- **Optional Presidio backend** — opt-in richer PII detection behind the
+  same detector interface; regex + entropy stay the always-on default, and a
+  policy that enables presidio without the dependency present is rejected at
+  startup rather than silently running weaker detection.
 - **Tiered policy engine** — reads auto-allow, writes/deletes escalate to a
   human, dangerous tools denied; deny by default.
 
@@ -96,6 +103,7 @@ python -m proxy.cli init                                  # starter policy + wor
 python -m proxy.cli inspect read_file '{"path": "a.txt"}' # one explained decision
 python -m proxy.cli run -- <your-mcp-server-command>      # mediate a live server
 python -m proxy.cli verify                                # audit-chain integrity
+python -m proxy.cli stats                                 # operational telemetry
 ```
 
 With no policy file present, Warden runs on a built-in deny-all default —
@@ -114,7 +122,7 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (172 passing tests):** the full v1 pipeline — request
+**Built and tested (200 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
@@ -133,8 +141,8 @@ heuristic — a first-pass filter, not a classifier; that upgrade is v2, and
 detection is defense-in-depth either way: the policy layer is the control
 that prevents harm. Measured overhead is published in
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): ≈ 2 ms per mediated tool call
-end to end, deny path effectively free. Next up: audit telemetry derived
-from the log, and an optional Presidio detector backend.
+end to end, deny path effectively free. The v1.5 registry-hardening
+phase is complete; v2 (model-layer security) is next.
 
 ## License
 

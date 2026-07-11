@@ -33,7 +33,7 @@ DEFAULT_POLICY_FILE = "warden.policy.yaml"
 _DENY_ALL_POLICY = """\
 version: 1
 mode: enforce
-workspace_root: "{workspace}"
+workspace_root: '{workspace}'
 tools: {{}}
 redaction:
   enabled: true
@@ -43,7 +43,7 @@ inbound_inspection:
   on_injection_detected: escalate
 audit:
   enabled: true
-  path: "{audit}"
+  path: '{audit}'
 """
 
 _STARTER_POLICY = """\
@@ -52,7 +52,7 @@ _STARTER_POLICY = """\
 # annotated reference.
 version: 1
 mode: enforce            # switch to `monitor` to log decisions without enforcing
-workspace_root: "{workspace}"
+workspace_root: '{workspace}'
 
 execution:
   timeout_seconds: 30    # watchdog: a tool call that outlives this is abandoned
@@ -89,7 +89,7 @@ inbound_inspection:
 
 audit:
   enabled: true
-  path: "{audit}"
+  path: '{audit}'
 """
 
 
@@ -103,8 +103,8 @@ def _load_engine(policy_arg: str | None, tmp_dir: Path | None = None) -> PolicyE
     workdir = tmp_dir or Path.cwd()
     fallback = workdir / ".warden.default.policy.yaml"
     fallback.write_text(_DENY_ALL_POLICY.format(
-        workspace=str(workdir / "workspace"),
-        audit=str(workdir / "audit" / "warden_audit.db")))
+        workspace=(workdir / "workspace").as_posix(),
+        audit=(workdir / "audit" / "warden_audit.db").as_posix()))
     print("[warden] no policy found — running on the built-in DENY-ALL default. "
           "Run `warden init` to create a real policy.", file=sys.stderr)
     return PolicyEngine(str(fallback))
@@ -122,7 +122,7 @@ def cmd_init(args) -> int:
     workspace = Path(args.workspace or "workspace").resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     audit = Path("audit/warden_audit.db")
-    target.write_text(_STARTER_POLICY.format(workspace=workspace, audit=audit))
+    target.write_text(_STARTER_POLICY.format(workspace=workspace.as_posix(), audit=audit.as_posix()))
     print(f"[warden] wrote {target}")
     print(f"[warden] workspace: {workspace}")
     print("[warden] next: `warden inspect read_file '{\"path\": \"notes.txt\"}'`")
@@ -197,6 +197,29 @@ def cmd_run(args) -> int:
         audit.close()
 
 
+def cmd_stats(args) -> int:
+    """v1.5.4: operational telemetry derived from the forensic audit log."""
+    from proxy.audit.telemetry import snapshot, render
+    if args.audit:
+        path = args.audit  # explicit path: no policy needed at all
+    else:
+        try:
+            engine = _load_engine(args.policy)
+            path = _audit_path(engine)
+        except (PolicyValidationError, FileNotFoundError) as e:
+            print(f"[warden] policy error: {e}", file=sys.stderr)
+            return 2
+    if not Path(path).exists():
+        print(f"[warden] no audit log at {path}", file=sys.stderr)
+        return 2
+    report = snapshot(path)
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(render(report, top=args.top))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="warden",
                                 description="Zero-trust security runtime for AI agents")
@@ -219,6 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("verify", help="verify the audit chain end to end")
     sp.add_argument("--audit", help="audit db path (default: from policy)")
     sp.set_defaults(func=cmd_verify)
+
+    sp = sub.add_parser("stats", help="operational telemetry from the audit log")
+    sp.add_argument("--audit", help="audit db path (default: from policy)")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp.add_argument("--top", type=int, default=10,
+                    help="rows shown per listing (default 10)")
+    sp.set_defaults(func=cmd_stats)
 
     sp = sub.add_parser("run", help="run an MCP server behind Warden")
     sp.add_argument("--audit", help="audit db path (default: from policy)")

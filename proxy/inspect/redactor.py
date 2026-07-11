@@ -113,6 +113,17 @@ def scan(text: str, detectors: list[str] | None = None) -> list[Finding]:
             if not already and _shannon_entropy(tok) >= _ENTROPY_THRESHOLD:
                 findings.append(Finding("api_keys", tok, m.start(), m.end()))
 
+    # v1.5.5: optional Presidio backend — opt-in, additive, never a
+    # replacement. Regex + entropy findings above always stand; Presidio
+    # contributes richer PII on top, deduped where spans overlap.
+    if "presidio" in enabled:
+        from proxy.inspect import presidio_backend
+        for f in presidio_backend.scan_presidio(text):
+            overlapped = any(
+                f.start < g.end and g.start < f.end for g in findings)
+            if not overlapped:
+                findings.append(f)
+
     return findings
 
 

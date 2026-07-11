@@ -49,11 +49,15 @@ def main():
         elif method == "tools/call":
             name = (msg.get("params") or {}).get("name")
             args = (msg.get("params") or {}).get("arguments") or {}
-            
-            # Handle Windows paths correctly for basename
+            # Warden rewrites path arguments to their CANONICAL absolute form
+            # before forwarding (the checked path and the executed path must be
+            # the same string), so dispatch on the basename — a real server
+            # would similarly receive absolute, workspace-contained paths.
+            # os.path.basename handles BOTH separators: the canonical path uses
+            # the host OS separator (backslash on Windows), so a "/"-only split
+            # would treat the whole Windows path as the basename and misdispatch.
             raw_path = args.get("path", "")
             basename = os.path.basename(raw_path.replace("\\", "/"))
-            
             if name == "slow_tool":
                 time.sleep(5)
                 out = reply(msg_id, "finally awake")
