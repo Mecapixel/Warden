@@ -1,15 +1,21 @@
 """
 proxy/guards/egress.py
 
-Minimal egress allowlist — the v1 policy rule that closes the exfiltration
-half of the indirect-injection kill chain. An injected instruction that
-successfully steers the agent still has to move data OFF the machine; if the
-destination host is not allowlisted, the tool call dies here.
+Egress host-matching primitives — the v1 allowlist that closed the
+exfiltration half of the indirect-injection kill chain, now the shared
+foundation of the full v3 network subsystem.
 
-This is deliberately the minimal version: exact-host and wildcard-suffix
-matching on URL-bearing arguments. The full network subsystem (SSRF pinning,
-DNS controls, redirect re-checks, reputation) is v3 — but "deny unknown
-hosts" does not need any of that to start protecting users today.
+An injected instruction that successfully steers the agent still has to move
+data OFF the machine; if the destination host is not allowlisted, the tool
+call dies here. v1 shipped this check alone (exact-host and wildcard-suffix
+matching on URL-bearing arguments); v3 built the rest of the battery around
+it — per-tool scopes, scheme control, SSRF resolve-then-validate, DNS
+pinning and sinkholing, reputation, rate limiting, the download guard, and
+canary tripwires — all in proxy/network/. The matching semantics defined
+here are used verbatim by the allowlist, per-tool scopes, sinkhole list, and
+reputation lists, so one implementation carries one meaning of "matches"
+everywhere: an allowlist and a sinkhole that disagreed about wildcards would
+be a vulnerability shaped like a convenience.
 
 Deny-by-default applies: if egress checking is enabled and a URL's host
 matches nothing in the allowlist, the call is denied.

@@ -3,6 +3,80 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [3.0.0] — 2026-07-11
+
+**v3 — Network Security.** Full control of outbound communication. The
+minimal egress allowlist shipped in v1; this release completes the
+subsystem: one ordered battery (`NetworkGuard.check_url`) that every
+outbound URL faces — scheme, DNS sinkhole, global allowlist, per-tool
+scope, reputation, SSRF resolve-then-validate — reused verbatim for every
+redirect hop, so the engine and the redirect inspector cannot drift apart.
+The entire subsystem runs against injectable resolvers: 90 new tests,
+zero real network I/O.
+
+### Added
+- `proxy/network/guard.py`: the ordered battery. Per-tool egress scopes
+  NARROW the global allowlist and can never widen it; sinkhole outranks
+  allowlist so a configuration conflict resolves to the safe answer.
+- `proxy/network/addrguard.py`: SSRF address classification. Cloud
+  metadata endpoints (AWS/Azure/GCP/OpenStack, Alibaba, Oracle) are
+  forbidden unconditionally; IPv4-mapped IPv6 is unwrapped so `::ffff:`
+  dressing cannot slip a private v4 address past a v4-only check;
+  loopback / link-local / private are policy-controlled and default to
+  blocked. Invalid input classifies as a violation, never a pass.
+- `proxy/network/dnspin.py`: resolve-then-validate with pinning. Every
+  address in a DNS answer is validated — one bad address poisons the
+  whole answer. A public-to-forbidden flip on a host that previously
+  resolved clean is attributed as a DNS-rebinding signature (SSRF-002)
+  distinct from an always-internal host (SSRF-001); pins expire so stale
+  memory cannot mislabel. Resolution failure fails closed. The residual
+  proxy-not-socket-owner TOCTOU window is documented, not papered over.
+- `proxy/network/httpguard.py`: every redirect hop is a fresh network
+  decision through the identical battery (HTTP-002), with a hop cap
+  (HTTP-001); declared Content-Length and MIME type are the cheap early
+  wall on the response side (HTTP-003/004) — declared headers can lie,
+  which is why the download guard re-measures the actual payload.
+- `proxy/network/downloads.py`: download guard — oversize (DL-001),
+  executable magic bytes for PE/ELF/Mach-O (DL-002), zip bombs by
+  declared expansion and compression ratio WITHOUT inflating the payload
+  (DL-003), nested-archive depth and encrypted members (DL-004). Text
+  payloads are judged on raw bytes AND any base64-decoded form, so a
+  binary dressed as text is judged by what it decodes to.
+- `proxy/network/reputation.py`: known-good / known-bad / unknown with
+  TTL'd runtime cache and JSON persistence. known_bad denies even an
+  allowlisted host; precedence bad > good > cache > unknown, so a host on
+  both lists resolves to the safe answer. No third-party API calls — a
+  gateway that phones home on every decision has added a trust boundary.
+- `proxy/network/ratelimit.py`: in-process token buckets, global and
+  per-tool (RATE-001). A call must clear BOTH; the tool bucket is checked
+  first so a noisy tool exhausts its own budget before starving quiet
+  tools. Injectable clock; no Redis until multi-node is real.
+- `proxy/network/canary.py`: canary tokens (CAN-001, risk 100) — the only
+  detector permitted to claim certainty, because its false-positive cost
+  is structurally zero. `seed_workspace()` plants labeled decoys (.env,
+  SSH-key-shaped, notes) whose fake values embed the marker, so partial
+  exfiltration still trips the wire; the vault persists across sessions
+  to catch the patient adversary.
+- Engine + mediator integration: URL-bearing arguments run the battery in
+  `decide()`; the mediator gains canary-before-everything and
+  rate-limit-before-policy on the request path, `mediate_redirects()` on
+  the redirect path, and header checks + download guard on the response
+  path. Policy validation rejects malformed `network:` config at load.
+- `tests/test_v3_network_security.py`: 90 tests, all resolvers injected,
+  covering every battery rule, fail-closed path, and integration seam.
+
+### Fixed
+- **Escalate-masks-deny ordering flaw** — found by the new v3 suite on
+  its first run: with `reputation.unknown_action: escalate`, the
+  reputation check (step 5) returned REP-002 ESCALATE before the SSRF
+  check (step 6) ever resolved the host. A reputation-unknown hostname
+  whose DNS answer was the cloud metadata service produced a human
+  approval prompt reading "no reputation record" instead of a hard SSRF
+  deny — the human at the gate deciding on the wrong information. The
+  battery now composes by severity: an escalate hint is held pending
+  until the full battery has run and is returned only if nothing later
+  demands a hard deny. Both directions are pinned as regression tests.
+
 ## [2.0.0] — 2026-07-11
 
 **v2 — Model Security.** Defense-in-depth on top of v1 enforcement: expanded

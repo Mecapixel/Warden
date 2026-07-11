@@ -16,6 +16,12 @@ DEFENSIBILITY OF THE WEIGHTS (this matters — do not treat these as arbitrary):
 The weights below are ordered by blast radius, i.e. how irreversible and how
 severe the worst outcome of that signal is.
 
+  canary_exfiltration (100) — the only signal permitted to claim certainty.
+      Canary markers exist nowhere except Warden-planted decoys; one
+      appearing in outbound arguments has exactly one explanation, so its
+      false-positive cost is structurally zero and it pins the score at the
+      ceiling. Certainty earns the maximum; everything else is inference.
+
   filesystem_escape (60) — reading/writing outside the workspace can leak
       credentials (/etc/passwd, SSH keys) or overwrite system files. Worst
       case is full-host compromise; a hard boundary violation with no
@@ -24,8 +30,15 @@ severe the worst outcome of that signal is.
   shell_injection (60) — arbitrary command execution is equivalent in blast
       radius to filesystem escape; both mean "the agent can do anything."
 
+  ssrf_violation (60) — a resolved or literal address in a forbidden class
+      (cloud metadata, loopback, link-local, private). Worst case is live
+      cloud credentials from the metadata service: total compromise tier.
+      Covers both first-sight violations (SSRF-001) and rebinding flips
+      (SSRF-002) — same blast radius, different attribution.
+
   policy_deny_tier / unknown_tool / unregistered_tool / mission_violation /
-  egress_violation (60)
+  egress_violation / dns_sinkhole / reputation_bad / rate_limited /
+  download_violation / http_violation (60)
       — every deny-by-default signal carries the deny-band weight, by design:
       the SCORE and the VERDICT must tell the same story. A hard denial that
       scored in the escalate band would contradict itself in front of an
@@ -34,6 +47,13 @@ severe the worst outcome of that signal is.
   secret_in_transit (25) — a credential moving through a tool call is serious
       (exfiltration risk) but is often recoverable/rotatable, so it sits below
       the "total compromise" tier.
+
+  reputation_unknown (25) — a host with no reputation record is not an
+      attack, it is an absence of evidence; weighted to the escalate band so
+      a human looks, matching the REP-002 verdict hint. When policy sets
+      unknown_action: deny, the engine issues the DENY on the operator's
+      explicit instruction — the signal itself never claims more than it
+      knows.
 
   prompt_injection (15) — an injection *attempt* is a strong signal of intent
       but is not itself a completed breach; it is weighted to push a request
@@ -61,15 +81,23 @@ from dataclasses import dataclass, field
 
 # Named risk contributors and their point weights. Documented above.
 RISK_WEIGHTS = {
+    "canary_exfiltration": 100,  # confirmed exfil — the certainty ceiling
     "filesystem_escape": 60,
     "shell_injection": 60,
     "policy_deny_tier": 60,      # explicitly denied tool
     "unknown_tool": 60,          # deny-by-default expressed as risk
     "unregistered_tool": 60,     # tool not in the allowlist registry
     "mission_violation": 60,     # action outside the declared mission
-    "egress_violation": 60,      # network destination outside the allowlist
+    "egress_violation": 60,      # network destination outside the allowlist/scope/scheme
+    "ssrf_violation": 60,        # forbidden address class (metadata/loopback/private...)
+    "dns_sinkhole": 60,          # operator's hard never-list
+    "reputation_bad": 60,        # known-bad host, even if allowlisted
+    "rate_limited": 60,          # request volume exceeded the declared ceiling
+    "download_violation": 60,    # executable / zip bomb / oversized payload
+    "http_violation": 60,        # redirect laundering / header policy breach
     "schema_drift": 60,          # tool definition changed since approval (pin)
     "secret_in_transit": 25,
+    "reputation_unknown": 25,    # absence of evidence -> escalate band
     "prompt_injection": 15,
     "pii_in_transit": 10,
     "output_leak": 10,

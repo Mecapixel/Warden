@@ -129,7 +129,7 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (223 passing tests):** the full v1 pipeline — request
+**Built and tested (313 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
@@ -148,8 +148,12 @@ heuristic — a first-pass filter, not a classifier; that upgrade is v2, and
 detection is defense-in-depth either way: the policy layer is the control
 that prevents harm. Measured overhead is published in
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): ≈ 2 ms per mediated tool call
-end to end, deny path effectively free. The v1.5 registry-hardening phase and v2 (model-layer
-security) are complete; v3 (network security) is next.
+end to end, deny path effectively free. The v1.5 registry-hardening phase,
+v2 (model-layer security), and v3 (network security — the full outbound
+battery: per-tool egress scopes, SSRF resolve-then-validate with rebinding
+attribution, DNS sinkholing, redirect-hop re-checking, download guard,
+domain reputation, rate limiting, and canary tokens, all testable with
+injected resolvers) are complete; v4 (identity & trust) is next.
 
 ## License
 

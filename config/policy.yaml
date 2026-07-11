@@ -64,6 +64,12 @@ tool_registry:
 # filesystem paths, so the policy — not a hardcoded guess list — is the
 # authority on what gets canonicalized. Tools that omit path_args fall back
 # to the default key list (path, file, filename, directory, dir).
+#
+# v3: each tool may also declare `egress_hosts`: a per-tool egress scope
+# that NARROWS the global allowlist (a host must pass BOTH — scopes can
+# subtract, never add, so no tool spec can quietly widen the perimeter;
+# rule EGR-002). And `download_guard: true` opts a tool's responses into
+# payload inspection even when the global downloads guard is off.
 tools:
   read_file:
     tier: auto            # allow automatically
@@ -83,6 +89,16 @@ tools:
   delete_file:
     tier: escalate
     path_args: [path]
+
+  # Example of a network-capable tool with a per-tool egress scope. Even if
+  # the global allowlist admits more, THIS tool may only reach these hosts.
+  # http_get:
+  #   tier: auto
+  #   inspect_response: true
+  #   download_guard: true
+  #   url_args: [url]
+  #   egress_hosts:
+  #     - api.github.com
 
   # Example of a tool that is defined but hard-denied for now. Shell-style
   # tools are the highest RCE risk; keep them denied until argument
@@ -119,13 +135,120 @@ redaction:
 # injected instruction that steers the agent still has to move data OFF the
 # machine; unlisted hosts die at this check. Wildcards: '*.example.com'
 # allows subdomains but NOT example.com itself (list it separately).
+#
+# v3: allowed_schemes controls which URL schemes may appear at all
+# (rule EGR-003). https-only is the recommended posture; http is included
+# in the default for local development realities. ftp/file/gopher and
+# friends never belong in an agent tool call.
 # --------------------------------------------------------------------------
 egress:
   enabled: true
   allowed_hosts: []
+  allowed_schemes: [https, http]
   # allowed_hosts:
   #   - api.github.com
   #   - "*.internal.example.com"
+
+# --------------------------------------------------------------------------
+# v3 — Network Security subsystem. Everything below completes the trust
+# boundary the minimal v1 allowlist opened: what a hostname RESOLVES TO,
+# what comes BACK, how OFTEN, and whether planted tripwires ever move.
+# --------------------------------------------------------------------------
+network:
+
+  # SSRF defense: every URL that passes the allowlist is resolved and EVERY
+  # returned address is validated. Cloud metadata endpoints
+  # (169.254.169.254 and friends) are always forbidden when this is on —
+  # there is no legitimate agent route to an instance-credential service.
+  # The three toggles below control the policy-choice classes and default
+  # to blocked: zero trust means the operator opts INTO internal
+  # reachability, never out of it. A host that resolved public before and
+  # resolves internal now is flagged as a DNS-rebinding signature
+  # (SSRF-002) rather than a generic violation (SSRF-001).
+  ssrf:
+    enabled: true
+    block_private: true       # RFC 1918 / ULA
+    block_loopback: true      # 127.0.0.0/8, ::1
+    block_link_local: true    # 169.254.0.0/16, fe80::/10
+
+  # DNS controls. Sinkholed hosts are denied unconditionally (DNS-001),
+  # checked BEFORE the allowlist so a configuration conflict resolves to
+  # the safe answer. pin_ttl_seconds bounds how long a validated
+  # resolution is remembered for rebinding attribution.
+  dns:
+    sinkhole: []
+    # sinkhole:
+    #   - "*.pastebin-mirror.example"
+    pin_ttl_seconds: 3600
+
+  # Domain reputation — defense-in-depth OVER the allowlist. known_bad
+  # denies even an allowlisted host (REP-001): an entry allowlisted last
+  # year still gets blocked the day it turns up on a blocklist. Unknown
+  # hosts are gated per unknown_action (REP-002): 'allow' trusts the
+  # allowlist alone, 'escalate' puts a human in the loop, 'deny' requires
+  # every reachable host to be affirmatively known. The runtime cache
+  # persists to a human-readable JSON file.
+  reputation:
+    enabled: false
+    unknown_action: allow     # allow | escalate | deny
+    known_good: []
+    known_bad: []
+    cache_path: "audit/reputation_cache.json"
+    ttl_seconds: 86400
+
+  # Rate limiting — volume is a signal. A call must clear BOTH its per-tool
+  # bucket (if declared) and the global bucket (rule RATE-001). In-process
+  # token buckets by design: a single-host gateway does not need a network
+  # hop to count to ten, and adding one would put a new availability
+  # dependency in the deny path.
+  rate_limit:
+    enabled: true
+    global:
+      capacity: 120
+      refill_per_second: 2
+    per_tool: {}
+    # per_tool:
+    #   http_get: {capacity: 10, refill_per_second: 0.5}
+
+  # Download guard — payloads returning from tools are inspected for
+  # executables (DL-002), zip bombs by declared expansion and ratio
+  # (DL-003), nested archives beyond the depth cap and encrypted members
+  # (DL-004), and raw oversize (DL-001). Base64-transported binaries are
+  # decoded and judged by what they decode to. `enabled: true` guards
+  # every tool's responses; individual tools can also opt in via
+  # `download_guard: true` on their spec.
+  downloads:
+    enabled: true
+    max_bytes: 26214400                     # 25 MiB
+    max_archive_expanded_bytes: 104857600   # 100 MiB declared expansion
+    max_compression_ratio: 100
+    max_archive_depth: 2
+    block_executables: true
+
+  # HTTP inspection — every redirect hop is a fresh network decision run
+  # through the identical battery as the original URL (HTTP-002), with a
+  # hop cap against loops (HTTP-001). Declared Content-Length over the cap
+  # (HTTP-003) or a Content-Type outside allowed_mime_types (HTTP-004) is
+  # refused before payload inspection spends any work. Leave
+  # allowed_mime_types unset to accept any type (the download guard still
+  # measures the actual bytes).
+  http:
+    max_redirect_hops: 5
+    max_content_length: 26214400
+    # allowed_mime_types:
+    #   - text/*
+    #   - application/json
+
+  # Canary tokens — the zero-false-positive tripwire. When enabled, Warden
+  # can mint unique markers and plant decoy files (a fake .env, an
+  # SSH-key-shaped file) in the session workspace; a marker appearing in
+  # ANY outbound tool argument is a confirmed exfiltration (CAN-001,
+  # risk 100) — the only signal in the system permitted to claim
+  # certainty. The vault persists so markers planted today are still
+  # recognized in tomorrow's session.
+  canary:
+    enabled: true
+    store_path: "audit/canary_vault.json"
 
 # --------------------------------------------------------------------------
 # Inbound tool-data inspection. Data returned FROM a tool (a scraped page,

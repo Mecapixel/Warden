@@ -7,6 +7,21 @@ outcome. The policy engine stays pure (decisions only, no I/O); the Mediator
 owns everything around it — auditing, human approval, output inspection,
 monitor mode, and above all the fail-closed guarantee.
 
+v3 additions, placed by their nature:
+  CANARY TRIPWIRE (CAN-001) — checked FIRST, before rate limiting and before
+  the engine, because a canary marker in outbound arguments is a confirmed
+  exfiltration in progress: the one signal in the system with structurally
+  zero false-positive cost. Nothing outranks certainty.
+  RATE LIMITER (RATE-001) — stateful (token buckets), so it lives here, not
+  in the pure engine. Checked before the engine so a flooding agent burns
+  its budget without burning policy-evaluation cycles.
+  DOWNLOAD GUARD (DL-###) — runs on the response path: payloads returning
+  from tools are inspected for executables, zip bombs, nested archives, and
+  oversize before the agent's context ever sees them.
+  REDIRECT MEDIATION — mediate_redirects() lets the transport submit a
+  redirect chain for judgment; every hop is re-checked through the SAME
+  NetworkGuard battery the engine used for the original URL (HTTP-###).
+
 FAIL-CLOSED GUARANTEE: if ANY stage raises, times out, or returns something
 indeterminate, the outcome is DENY, and the failure itself is audited
 (rule FAIL-001). A Warden crash must never become an agent bypass. This is
@@ -18,7 +33,9 @@ This is the standard rollout path for a security control — observe, tune the
 weights on real traffic, then flip to `mode: enforce` — and it is the data
 source the v6 replay engine will consume. The audit record of every
 monitor-mode event carries `enforced: false` so the log never lies about
-what actually happened.
+what actually happened. Monitor mode governs the v3 layers identically —
+a mode that enforced some rules while monitoring others would be a policy
+that lies about itself.
 """
 
 from dataclasses import dataclass, field
@@ -32,6 +49,10 @@ from proxy.policy.engine import PolicyEngine
 from proxy.audit.log import AuditLog
 from proxy.inspect import inbound, redactor, threats
 from proxy.runtime.approval import ApprovalGate
+from proxy.network.ratelimit import RateLimiter
+from proxy.network.canary import CanaryVault
+from proxy.network import downloads as download_guard
+from proxy.network import httpguard
 
 
 @dataclass
@@ -47,7 +68,9 @@ class Outcome:
 class Mediator:
     def __init__(self, engine: PolicyEngine, audit: AuditLog,
                  approval: ApprovalGate | None = None,
-                 metrics: SecurityMetrics | None = None):
+                 metrics: SecurityMetrics | None = None,
+                 ratelimiter: RateLimiter | None = None,
+                 canary: CanaryVault | None = None):
         self.engine = engine
         self.audit = audit
         self.approval = approval or ApprovalGate()
@@ -55,17 +78,60 @@ class Mediator:
         self.mode = (engine.policy.get("mode") or "enforce").lower()
         if self.mode not in ("enforce", "monitor"):
             raise ValueError(f"policy 'mode' must be 'enforce' or 'monitor', got {self.mode!r}")
+        network_cfg = engine.network_cfg or {}
+        self.ratelimiter = ratelimiter or RateLimiter(network_cfg.get("rate_limit"))
+        canary_cfg = network_cfg.get("canary") or {}
+        if canary is not None:
+            self.canary = canary
+        elif canary_cfg.get("enabled"):
+            self.canary = CanaryVault(canary_cfg.get("store_path"))
+        else:
+            self.canary = None
+        self.downloads_cfg = network_cfg.get("downloads") or {}
+        self.http_cfg = network_cfg.get("http") or {}
 
     # ------------------------------------------------------------------ #
     # Request path
     # ------------------------------------------------------------------ #
     def mediate_call(self, tool: str, args: dict[str, Any] | None = None,
                      user: str = "agent", mission: Mission | None = None) -> Outcome:
-        """Normalize -> decide -> (approve) -> audit. Fail closed throughout."""
+        """Normalize -> canary -> rate limit -> decide -> (approve) -> audit.
+        Fail closed throughout."""
         try:
             request = Request.normalize(tool, args or {}, user=user)
         except Exception as e:
             return self._fail_closed(tool, f"normalization failed: {e!r}")
+
+        # v3: canary tripwire before anything else. A planted marker moving
+        # through outbound arguments is confirmed exfiltration — the audit
+        # record names which decoy was taken, because that is forensic
+        # information about what the agent was steered to read.
+        try:
+            if self.canary is not None and self.canary.count:
+                joined = " ".join(str(v) for v in request.args.values())
+                hits = self.canary.scan(joined)
+                if hits:
+                    labels = sorted({lbl for _t, lbl in hits})
+                    decision = self._hard_decision(
+                        request, rule="CAN-001", signal="canary_exfiltration",
+                        reason=("Outbound arguments contain a Warden canary marker "
+                                f"({', '.join(labels)}) — confirmed exfiltration attempt."),
+                        fix="Quarantine this agent session and review the audit chain; a canary hit has no benign explanation.")
+                    return self._resolve(request, decision)
+        except Exception as e:
+            return self._fail_closed(tool, f"canary scan failed: {e!r}")
+
+        # v3: rate limiting before policy evaluation. Volume is a signal.
+        try:
+            ok, why = self.ratelimiter.acquire(request.tool)
+            if not ok:
+                decision = self._hard_decision(
+                    request, rule="RATE-001", signal="rate_limited",
+                    reason=f"Request rate ceiling exceeded: {why}.",
+                    fix="Slow the agent down, or raise the ceiling in network.rate_limit if this volume is legitimate.")
+                return self._resolve(request, decision)
+        except Exception as e:
+            return self._fail_closed(tool, f"rate limiter failed: {e!r}")
 
         try:
             decision = self.engine.decide(request, mission)
@@ -76,6 +142,15 @@ class Mediator:
             return self._resolve(request, decision)
         except Exception as e:
             return self._fail_closed(request.tool, f"resolution failed: {e!r}")
+
+    def _hard_decision(self, request: Request, rule: str, signal: str,
+                       reason: str, fix: str) -> Decision:
+        from proxy.core.risk import RiskAssessment
+        risk = RiskAssessment()
+        risk.add(signal, reason)
+        return Decision.from_risk(
+            Verdict.DENY, rule=rule, action=request.tool, assessment=risk,
+            reason=reason, recommended_fix=fix, request_id=request.request_id)
 
     def _resolve(self, request: Request, decision: Decision) -> Outcome:
         detail = {
@@ -131,10 +206,45 @@ class Mediator:
         return Outcome(decision, execute=False, notes=[why])
 
     # ------------------------------------------------------------------ #
+    # Redirect path (v3)
+    # ------------------------------------------------------------------ #
+    def mediate_redirects(self, tool: str, hops: list[str],
+                          parent_event_id: str | None = None) -> tuple[bool, str | None]:
+        """Judge a redirect chain the transport observed for a tool's request.
+
+        `hops` is every URL in order, original first. Every hop runs through
+        the SAME NetworkGuard battery as the original URL — the allowlist's
+        oldest enemy is the second URL nobody checked. Returns
+        (permitted, reason). Fail closed: an inspection error is a refusal.
+        """
+        try:
+            tool_scope = (self.engine.tools.get(tool) or {}).get("egress_hosts")
+            violation = httpguard.check_redirect_chain(
+                hops,
+                lambda u: self.engine.network_guard.check_url(u, tool_scope=tool_scope),
+                max_hops=int(self.http_cfg.get("max_redirect_hops", 5)),
+            )
+            if violation is not None:
+                self.audit.record(tool, "DENY", violation.detail,
+                                  {"rule": violation.rule, "hops": len(hops)},
+                                  parent_event_id=parent_event_id)
+                return False, violation.detail
+            return True, None
+        except Exception as e:
+            try:
+                self.audit.record(tool, "DENY",
+                                  f"redirect inspection failed: {e!r} (fail closed)",
+                                  {"rule": "FAIL-003"}, parent_event_id=parent_event_id)
+            except Exception:
+                pass
+            return False, f"redirect inspection failed: {e!r}"
+
+    # ------------------------------------------------------------------ #
     # Response path
     # ------------------------------------------------------------------ #
     def mediate_response(self, tool: str, text: str,
-                         parent_event_id: str | None = None) -> tuple[str, list[str]]:
+                         parent_event_id: str | None = None,
+                         headers: dict[str, str] | None = None) -> tuple[str, list[str]]:
         """Inspect + redact data returning FROM a tool before the agent sees it.
 
         Returns (safe_text, notes). Fail closed: if inspection itself fails,
@@ -144,6 +254,34 @@ class Mediator:
         notes: list[str] = []
         try:
             rp = self.engine.response_policy(tool)
+
+            # v3: header checks first — the cheap early wall. Declared
+            # headers can lie, which is why the download guard below
+            # re-measures the actual payload; deliberate redundancy.
+            if headers:
+                hv = httpguard.check_headers(headers, self.http_cfg)
+                if hv is not None:
+                    self.audit.record(tool, "DENY", hv.detail,
+                                      {"rule": hv.rule},
+                                      parent_event_id=parent_event_id)
+                    return ("[WARDEN] Tool output withheld: the response's HTTP "
+                            "headers violated network policy.",
+                            notes + [f"headers refused ({hv.rule})"])
+
+            # v3: download guard — executables, zip bombs, nested archives,
+            # oversize, judged on raw bytes AND any base64-decoded form.
+            if rp.get("download_guard"):
+                violations = download_guard.inspect_text_payload(text, self.downloads_cfg)
+                if violations:
+                    top = violations[0]
+                    self.audit.record(tool, "DENY",
+                                      f"download guard: {top.detail}",
+                                      {"rule": top.rule,
+                                       "violations": [v.rule for v in violations]},
+                                      parent_event_id=parent_event_id)
+                    return ("[WARDEN] Tool output withheld: the payload violated "
+                            "download policy.",
+                            notes + [f"payload refused ({top.rule})"])
 
             if rp.get("redact_response"):
                 detectors = self.engine.redaction_cfg.get("detectors")

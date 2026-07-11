@@ -9,14 +9,22 @@ Pipeline order (deliberate, by blast radius):
     0b. Tool registry                      (least privilege at the registry)
     1. Tool known & permitted?             (deny-by-default; unknown => deny)
     2. Hard-deny tier?                     (explicitly forbidden tools)
+    2b. Tool-call schema validation        (known tool, wrong shape => deny)
     3. Path containment (filesystem)       (escape => hard-boundary deny)
+    3b. Network battery (v3)               (allowlist, scope, scheme, sinkhole,
+                                            reputation, SSRF resolve-validate)
     4. Credential screening on arguments   (secrets block; PII adds risk)
     5. Tier -> band reconciliation         (auto/escalate + accumulated risk)
 
-The engine is pure: it makes decisions but performs no I/O (no forwarding, no
-human prompt, no logging). That purity is what makes it fully testable against
-the synthetic attack suite. Rule IDs (FS-###, TOOL-###, SEC-###) let every
-decision cite the exact rule that governed it.
+The engine is pure in the sense that matters: it makes decisions, performs no
+forwarding, no human prompts, no logging. The one I/O it owns is resolution —
+filesystem canonicalization in step 3 and DNS resolution in step 3b — because
+both ARE the check: a path or host cannot be judged without resolving what it
+actually points at. The DNS resolver is injectable (constructor arg), so the
+full battery runs in tests with zero real network traffic, and a deployment
+can substitute a caching or DoH resolver. Rule IDs (FS-###, TOOL-###, SEC-###,
+EGR-###, SSRF-###, DNS-###, REP-###) let every decision cite the exact rule
+that governed it.
 
 POLICY VALIDATION: the policy file is validated at construction and the engine
 refuses to start on an invalid policy (fail closed at startup). A gateway that
@@ -32,9 +40,10 @@ from proxy.core.risk import RiskAssessment
 from proxy.core.decision import Decision, Verdict
 from proxy.core.mission import Mission
 from proxy.guards.canonicalize import canonicalize_within, PathTraversalError
-from proxy.guards.egress import check_url, EgressViolation
 from proxy.core.textnorm import harden
 from proxy.inspect import redactor
+from proxy.network.guard import NetworkGuard
+from proxy.network.dnspin import Resolver
 
 
 # Fallback argument keys treated as filesystem paths when a tool's policy does
@@ -48,6 +57,7 @@ _DEFAULT_PATH_ARG_KEYS = ("path", "file", "filename", "directory", "dir")
 _DEFAULT_URL_ARG_KEYS = ("url", "uri", "endpoint", "address", "host")
 
 _VALID_TIERS = {"auto", "escalate", "deny"}
+_VALID_UNKNOWN_ACTIONS = {"allow", "escalate", "deny"}
 
 
 class PolicyValidationError(Exception):
@@ -71,7 +81,7 @@ def _validate_policy(policy: Any) -> dict:
             raise PolicyValidationError(
                 f"policy.yaml: tools.{name}.tier is {tier!r}; must be one of {sorted(_VALID_TIERS)}"
             )
-        for arg_field in ("path_args", "url_args"):
+        for arg_field in ("path_args", "url_args", "egress_hosts"):
             val = spec.get(arg_field)
             if val is not None and (
                 not isinstance(val, list) or not all(isinstance(k, str) for k in val)
@@ -80,6 +90,37 @@ def _validate_policy(policy: Any) -> dict:
     registry = policy.get("tool_registry", [])
     if registry is not None and not isinstance(registry, list):
         raise PolicyValidationError("policy.yaml: 'tool_registry' must be a list")
+
+    # v3: the network section, when present, must be structurally sound.
+    # An unknown_action typo like 'esclate' silently meaning 'allow' would be
+    # a policy that enforces less than the operator wrote — refuse to start.
+    network = policy.get("network")
+    if network is not None:
+        if not isinstance(network, dict):
+            raise PolicyValidationError("policy.yaml: 'network' must be a mapping")
+        rep = network.get("reputation") or {}
+        ua = str(rep.get("unknown_action", "allow")).lower()
+        if ua not in _VALID_UNKNOWN_ACTIONS:
+            raise PolicyValidationError(
+                f"policy.yaml: network.reputation.unknown_action is {ua!r}; "
+                f"must be one of {sorted(_VALID_UNKNOWN_ACTIONS)}"
+            )
+        rl = network.get("rate_limit") or {}
+        for scope_name, scope in (("global", rl.get("global") or {}),
+                                  *((f"per_tool.{t}", s) for t, s in (rl.get("per_tool") or {}).items())):
+            for field_name in ("capacity", "refill_per_second"):
+                v = scope.get(field_name)
+                if v is not None and (not isinstance(v, (int, float)) or v < 0):
+                    raise PolicyValidationError(
+                        f"policy.yaml: network.rate_limit.{scope_name}.{field_name} "
+                        f"must be a non-negative number"
+                    )
+        for list_field in ("sinkhole",):
+            val = (network.get("dns") or {}).get(list_field)
+            if val is not None and (
+                not isinstance(val, list) or not all(isinstance(k, str) for k in val)
+            ):
+                raise PolicyValidationError(f"policy.yaml: network.dns.{list_field} must be a list of strings")
 
     # v1.5.5: if the policy explicitly enables the presidio detector, the
     # backend must actually load. A security tool must never quietly
@@ -100,7 +141,7 @@ def _validate_policy(policy: Any) -> dict:
 
 
 class PolicyEngine:
-    def __init__(self, policy_path: str):
+    def __init__(self, policy_path: str, resolver: Resolver | None = None):
         with open(policy_path) as fh:
             try:
                 loaded = yaml.safe_load(fh)
@@ -119,6 +160,13 @@ class PolicyEngine:
         # to anything not listed there).
         self.tool_registry = set(self.policy.get("tool_registry", []) or [])
         self.egress_cfg = self.policy.get("egress", {}) or {}
+        self.network_cfg = self.policy.get("network", {}) or {}
+        # v3: one NetworkGuard instance for the engine's lifetime, so the DNS
+        # pin cache and reputation cache accumulate across requests — rebinding
+        # detection is only possible with memory. The transport reuses this
+        # same instance for redirect-hop re-checks: one battery, one path.
+        self.network_guard = NetworkGuard(self.egress_cfg, self.network_cfg,
+                                          resolver=resolver)
 
     def decide(self, request: Request, mission: Mission | None = None) -> Decision:
         """Evaluate a normalized Request and return a rich Decision.
@@ -229,24 +277,38 @@ class PolicyEngine:
                     target = requested
                     safe_path = str(resolved)
 
-        # 3b. Egress allowlist for URL-bearing arguments. An unlisted network
-        # destination is denied outright — exfiltration dies at the host check.
+        # 3b. v3 network battery for URL-bearing arguments. One ordered check
+        # sequence — scheme, sinkhole, global allowlist, per-tool scope,
+        # reputation, SSRF resolve-then-validate — behind a single entry point
+        # (NetworkGuard.check_url), so the engine and the redirect inspector
+        # cannot drift apart. The guard reports; the engine decides.
         if self.egress_cfg.get("enabled"):
             url_keys = spec.get("url_args") or _DEFAULT_URL_ARG_KEYS
-            allowlist = self.egress_cfg.get("allowed_hosts", []) or []
+            tool_scope = spec.get("egress_hosts")   # None = no per-tool narrowing
             for key in url_keys:
                 if key in args:
                     url = str(args[key])
-                    try:
-                        check_url(url, allowlist)
-                    except EgressViolation as ev:
-                        risk.add("egress_violation",
-                                 f"destination host {ev.host!r} is not in the egress allowlist")
+                    violation = self.network_guard.check_url(url, tool_scope=tool_scope)
+                    if violation is not None:
+                        risk.add(violation.signal, violation.reason)
+                        verdict = (Verdict.ESCALATE
+                                   if violation.verdict_hint == "escalate"
+                                   else Verdict.DENY)
+                        fixes = {
+                            "EGR-001": "Add the host to egress.allowed_hosts in policy.yaml if this destination is intended.",
+                            "EGR-002": "Add the host to this tool's egress_hosts scope in policy.yaml if this destination is intended.",
+                            "EGR-003": "Add the scheme to egress.allowed_schemes in policy.yaml if it is genuinely needed.",
+                            "DNS-001": "Remove the host from network.dns.sinkhole if this block is no longer intended.",
+                            "REP-001": "The host is on the known-bad list; if that listing is wrong, remove it from network.reputation.known_bad.",
+                            "REP-002": "Add the host to network.reputation.known_good, or relax network.reputation.unknown_action.",
+                            "SSRF-001": "Agent tool calls have no legitimate route to internal or metadata addresses; if this is truly intended infrastructure access, adjust network.ssrf in policy.yaml deliberately.",
+                            "SSRF-002": "This host's DNS now answers with an internal address after previously answering public — treat as hostile until investigated.",
+                        }
                         return Decision.from_risk(
-                            Verdict.DENY, rule="EGR-001", action=tool, assessment=risk,
-                            reason="Network destination is not in the egress allowlist.",
+                            verdict, rule=violation.rule, action=tool, assessment=risk,
+                            reason=violation.reason,
                             target=url,
-                            recommended_fix="Add the host to egress.allowed_hosts in policy.yaml if this destination is intended.",
+                            recommended_fix=fixes.get(violation.rule),
                             request_id=request.request_id,
                         )
 
@@ -295,8 +357,12 @@ class PolicyEngine:
     def response_policy(self, tool: str) -> dict[str, bool]:
         """What to do with a tool's RETURNED data before handing it to the agent."""
         spec = self.tools.get(tool, {})
+        downloads_cfg = self.network_cfg.get("downloads") or {}
         return {
             "inspect_response": bool(spec.get("inspect_response")),
             "redact_response": bool(self.redaction_cfg.get("enabled")),
             "inbound_inspection": bool(self.policy.get("inbound_inspection", {}).get("enabled")),
+            # v3: the download guard runs for a tool when the network policy
+            # enables it globally OR the tool spec opts in explicitly.
+            "download_guard": bool(downloads_cfg.get("enabled") or spec.get("download_guard")),
         }
