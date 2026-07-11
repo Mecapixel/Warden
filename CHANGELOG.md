@@ -3,6 +3,66 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.0.0] — 2026-07-11
+
+**v5 — Runtime Containment.** Isolate execution environments and limit
+blast radius. The downstream MCP server no longer has to run naked on the
+host: Warden provisions the sandbox it runs in — Warden, not the workload's
+own configuration, because a box the workload can describe is decoration.
+Absent a `containment:` block, nothing changes. 61 new tests; the entire
+subsystem is exercised with injected backend detection and injected process
+tables — no Docker daemon, overlay mount, or /proc required, which is
+itself the property being tested.
+
+### Added
+- `proxy/containment/backends.py`: the isolation ladder — Docker (namespace
+  /cgroup isolation, shared kernel) → gVisor (userspace kernel, syscalls
+  never reach the host directly) → Wasmtime (no ambient kernel, filesystem,
+  or network to escape into; workload must be a wasm module, and
+  pretending otherwise is refused rather than silently downgraded).
+  Detection probes through an injectable runner; selection is
+  required-or-STRONGER, never weaker — a host that cannot provide the
+  required rung is SBX-001 at provision time, not a quiet fallback.
+- `proxy/containment/sandbox.py`: provisioning with a non-negotiable floor.
+  Every spec has network `none` (outbound access goes through the v3 egress
+  battery at the proxy — the sandbox is not a second network path),
+  read-only rootfs, cap-drop ALL, no-new-privileges, and a size-capped
+  noexec/nosuid tmpfs; any attempt to construct a spec below the floor is
+  SBX-002 by construction — there is no code path that produces an open
+  spec. Rendering produces argv as data; nothing in the package executes.
+- `proxy/containment/ephemeral.py`: the writable surface dies with the run.
+  Overlay mode renders a Linux OverlayFS spec (read-only lower layer,
+  provably untouched because overlay never writes to it); staging mode
+  works everywhere else and the audit record names which mode was in play
+  — recorded, never blurred. Destruction is VERIFIED: destroy() re-checks
+  the tree, and survivors are an EPH-001 violation with every survivor
+  named, treated as a persistence attempt until proven otherwise.
+- `proxy/containment/quotas.py`: CPU / memory / disk / pids / wall clock.
+  Validated positive at load — a zero, negative, or MISSPELLED quota is a
+  startup policy error, never a silent "unlimited". Docker rendering pins
+  swap equal to memory so the cap has no overflow valve; the wall-clock
+  Deadline is held by Warden with an injectable clock, because a wedged
+  workload does not get a vote on whether it has timed out (QUO-001).
+- `proxy/containment/procmon.py`: what the workload DOES with its process
+  table — fork breaches counted through the whole descendant tree so
+  forking through an intermediary doesn't launder the count (PROC-001),
+  zombie accumulation with zero tolerance by default (PROC-002), overstay
+  judged on Warden's clock (PROC-003), and descendants running executables
+  outside the declared allowlist (PROC-004). Snapshots arrive through an
+  injectable provider (/proc walker supplied for Linux hosts); a provider
+  failure reports the monitor as blind (PROC-000) — blind is not clean.
+- Transport integration: `MCPProxy` accepts a ProvisionedSandbox and spawns
+  the sandbox argv with the real server command inside it; the containment
+  posture (isolation level, image, floor flags, quotas) is recorded on the
+  audit chain before the first byte of protocol flows, so every decision in
+  the run is attributable to a known isolation level. Policy validation
+  rejects malformed `containment:` config at load, including the
+  wasmtime-without-a-module contradiction.
+- `tests/test_v5_containment.py`: 61 tests — ladder selection in every
+  direction, floor unbreachability, argv posture assertions, verified
+  destruction with named survivors, quota load-validation, deadline
+  behavior, all five process signatures, and transport integration.
+
 ## [4.0.0] — 2026-07-11
 
 **v4 — Identity & Trust.** Who is asking, what exactly are they entitled to

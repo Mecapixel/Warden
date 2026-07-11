@@ -342,3 +342,43 @@ identity:
     enabled: false
     encrypt: false
     # store_path: memory/agent_memory.json
+
+# ---------------------------------------------------------------------------
+# v5 — Runtime Containment. Absent or disabled, nothing changes. Enabled,
+# the downstream MCP server runs inside a Warden-provisioned sandbox: Warden
+# constructs the environment (never the workload's own config), the floor is
+# non-negotiable (network none, read-only rootfs, cap-drop ALL,
+# no-new-privileges — SBX-002 to attempt otherwise), and the isolation level
+# is required-or-STRONGER, never weaker (SBX-001 if the host can't provide
+# it). Outbound access for tools goes through the v3 egress battery at the
+# proxy; the sandbox is not a second network path.
+# ---------------------------------------------------------------------------
+containment:
+  enabled: false
+  # The ladder, weakest to strongest: docker -> gvisor -> wasmtime.
+  # allow_stronger lets provisioning climb; nothing ever descends.
+  required_isolation: docker
+  allow_stronger: true
+  image: python:3.12-slim
+  # wasm_module: server.wasm      # required if the rung is wasmtime
+  tmpfs_size_mb: 64
+  # Ephemeral writable surface: 'staging' works everywhere; 'overlay'
+  # renders a Linux OverlayFS spec (read-only lower layer, provably
+  # untouched). Destruction is verified — survivors are EPH-001.
+  ephemeral: staging
+  # Blast radius. All validated positive at load; a typo'd quota is a
+  # startup error, never a silent 'unlimited'.
+  quotas:
+    cpus: 1.0
+    memory_mb: 512
+    disk_mb: 256
+    pids: 64
+    timeout_seconds: 300
+  # What the workload DOES with its process table, not just what it
+  # consumes. PROC-001 fork breach, PROC-002 zombies, PROC-003 overstay,
+  # PROC-004 executable outside the allowlist.
+  process_monitor:
+    max_children: 8
+    max_zombies: 0
+    max_runtime_seconds: 300
+    # allowed_executables: ["/usr/local/bin/python*"]

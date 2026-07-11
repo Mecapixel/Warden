@@ -275,11 +275,23 @@ class MCPProxy:
     def __init__(self, mediator: Mediator, server_cmd: list[str],
                  mission: Mission | None = None,
                  registry: ToolRegistry | None = None,
-                 auto_approve_first_sight: bool = False):
+                 auto_approve_first_sight: bool = False,
+                 sandbox=None):
         self.interceptor = MCPInterceptor(
             mediator, mission, registry=registry,
             auto_approve_first_sight=auto_approve_first_sight)
-        self.server_cmd = server_cmd
+        # v5: if a ProvisionedSandbox is supplied, the REAL server runs inside
+        # it — the relay spawns the sandbox argv, which contains the server
+        # command. The containment posture is recorded on the audit chain
+        # before the first byte of protocol flows, so every decision in the
+        # run is attributable to a known isolation level.
+        self.sandbox = sandbox
+        self.server_cmd = list(sandbox.argv) if sandbox is not None else server_cmd
+        if sandbox is not None and mediator.audit is not None:
+            mediator.audit.record(
+                "containment", "SANDBOX_PROVISIONED",
+                f"downstream server contained at isolation "
+                f"{sandbox.level!r}", sandbox.audit_detail())
         timeout = (mediator.engine.policy.get("execution", {}) or {}).get("timeout_seconds")
         self.tool_timeout = float(timeout or DEFAULT_TOOL_TIMEOUT_SECONDS)
 

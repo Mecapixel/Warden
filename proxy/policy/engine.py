@@ -125,6 +125,42 @@ def _validate_policy(policy: Any) -> dict:
             ):
                 raise PolicyValidationError(f"policy.yaml: network.dns.{list_field} must be a list of strings")
 
+    # v5: the containment section, when present, must be structurally sound
+    # — same contract again: a typo that would contain LESS than the
+    # operator wrote is refused at startup.
+    containment = policy.get("containment")
+    if containment is not None:
+        if not isinstance(containment, dict):
+            raise PolicyValidationError("policy.yaml: 'containment' must be a mapping")
+        from proxy.containment.backends import ISOLATION_ORDER
+        req = containment.get("required_isolation", "docker")
+        if req not in ISOLATION_ORDER:
+            raise PolicyValidationError(
+                f"policy.yaml: containment.required_isolation {req!r} is not "
+                f"one of {ISOLATION_ORDER}")
+        if req == "wasmtime" and containment.get("enabled") \
+                and not containment.get("wasm_module"):
+            raise PolicyValidationError(
+                "policy.yaml: containment.required_isolation is 'wasmtime' "
+                "but no wasm_module is declared — a native command cannot "
+                "run on the wasm rung")
+        try:
+            from proxy.containment.quotas import Quotas, QuotaError
+            Quotas.from_policy(containment.get("quotas"))
+        except QuotaError as exc:
+            raise PolicyValidationError(f"policy.yaml: {exc}") from exc
+        pm = containment.get("process_monitor")
+        if pm is not None:
+            if not isinstance(pm, dict):
+                raise PolicyValidationError(
+                    "policy.yaml: containment.process_monitor must be a mapping")
+            try:
+                from proxy.containment.procmon import ProcessMonitor
+                ProcessMonitor(pm, snapshot_provider=lambda: [])
+            except ValueError as exc:
+                raise PolicyValidationError(
+                    f"policy.yaml: containment.process_monitor: {exc}") from exc
+
     # v4: the identity section, when present, must be structurally sound.
     # The same rule as v3's network block: a typo that silently enforces
     # LESS than the operator wrote is refused at startup, never discovered

@@ -29,9 +29,9 @@ make the *model* safer. Warden takes the complementary approach used
 everywhere else in security: put a policy-enforcing checkpoint between the
 untrusted actor and the sensitive resource, and log everything, tamper-evidently.
 
-## What's built (v1 + v1.5.1)
+## What's built (v1 → v5)
 
-A working runtime, proven by a 223-test synthetic attack, fuzz, and performance suite:
+A working runtime, proven by a 438-test synthetic attack, fuzz, and performance suite:
 
 - **Path canonicalization** — blocks `../../etc/passwd`, absolute-path escapes,
   and symlink escapes; everything is confined to a workspace root.
@@ -83,6 +83,35 @@ A working runtime, proven by a 223-test synthetic attack, fuzz, and performance 
   labeled attack corpus with miss rates published per class
   ([`docs/DETECTION_POSTURE.md`](docs/DETECTION_POSTURE.md)). All
   defense-in-depth on top of v1 enforcement, never a replacement for it.
+- **v3 network-security layer** — one ordered battery for every outbound
+  URL (scheme, DNS sinkhole, global allowlist, per-tool scopes that narrow
+  and never widen, domain reputation, SSRF resolve-then-validate with
+  DNS-rebinding attribution), reused verbatim for every redirect hop; a
+  download guard (executable magics, zip bombs judged without inflating
+  them, nested/encrypted archives, base64-dressed binaries); token-bucket
+  rate limiting; and canary tokens — the only detector permitted to claim
+  certainty, because its false-positive cost is structurally zero. The
+  whole subsystem runs against injectable resolvers: zero network I/O in
+  its tests.
+- **v4 identity & trust layer** — agent RBAC (the invoking user's role
+  INTERSECTED with the deployment's scope, deny-by-default for unknown
+  identities), HMAC-signed per-session capability tokens verified against
+  canonical targets (single-use by default, replay refused, all revoked at
+  the key when the session closes), per-capability approval policies with
+  audit-chain history and escalation chains that cannot approval-shop,
+  secure sessions that revoke keys BEFORE wiping workspaces, and signed,
+  hash-chained, versioned agent memory with rollback pinning — tampering,
+  truncation, and head-deletion all detected, reads verify before they
+  return.
+- **v5 runtime-containment layer** — the downstream MCP server runs inside
+  a Warden-provisioned sandbox: the docker→gvisor→wasmtime isolation
+  ladder with required-or-stronger selection (never a silent downgrade),
+  an unbreachable floor (network none, read-only rootfs, cap-drop ALL,
+  no-new-privileges), verified-destruction ephemeral workspaces, resource
+  quotas validated at load with a host-held wall clock, and a process
+  monitor for fork breaches, zombies, overstay, and unexpected
+  executables. Rendered argv is the tested artifact — no container
+  runtime needed to prove the posture.
 - **Tiered policy engine** — reads auto-allow, writes/deletes escalate to a
   human, dangerous tools denied; deny by default.
 
@@ -129,37 +158,37 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (377 passing tests):** the full v1 pipeline — request
+**Built and tested (438 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
-transport with watchdog and fail-closed guarantees, the minimal egress
-allowlist, the human approval gate, monitor mode — plus v1.5.1
-tool-definition pinning with drift detection and reapproval, and v1.5.2
-Hypothesis fuzz and property testing of the Normalize boundary — which found
-and fixed two relay-crash vectors (deep-nesting JSON bombs, non-object
-top-level JSON) now locked in by a fail-closed line parser.
+transport with watchdog and fail-closed guarantees, the human approval gate,
+monitor mode — plus v1.5 registry hardening (tool-definition pinning with
+drift detection, Hypothesis fuzzing that found and fixed two relay-crash
+vectors), v2 model security (measured detection posture with published
+per-class miss rates), v3 network security (the full outbound battery, whose
+first test run found and fixed an escalate-masks-deny ordering flaw), v4
+identity & trust (whose review found and fixed a self-referential hash bug
+and a head-deletion rollback bypass in memory verification), and v5 runtime
+containment. Every phase is summarized in the What's built section above and
+documented release by release in [`CHANGELOG.md`](CHANGELOG.md).
 `python demo.py` exercises the decision core end to end;
 `tests/test_transport.py` proves the full story over real pipes.
 
 **Open, stated plainly:** no shell-style tool is enabled by design (the
-safe-exec guard waits, armed). The inbound-injection scanner is a regex
-heuristic — a first-pass filter, not a classifier; that upgrade is v2, and
+safe-exec guard waits, armed). Detection is heuristic-plus-measured, not
+ML — every classifier is scored against a labeled corpus with miss rates
+published in [`docs/DETECTION_POSTURE.md`](docs/DETECTION_POSTURE.md), and
 detection is defense-in-depth either way: the policy layer is the control
-that prevents harm. Measured overhead is published in
+that prevents harm. Containment renders and audits hardened sandbox specs;
+running them end to end against live Docker/gVisor/Wasmtime backends is
+deployment work, not library work, and is stated as such. Measured overhead
+is published in
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): ≈ 2 ms per mediated tool call
-end to end, deny path effectively free. The v1.5 registry-hardening phase,
-v2 (model-layer security), and v3 (network security — the full outbound
-battery: per-tool egress scopes, SSRF resolve-then-validate with rebinding
-attribution, DNS sinkholing, redirect-hop re-checking, download guard,
-domain reputation, rate limiting, and canary tokens, all testable with
-injected resolvers), and v4 (identity & trust — agent RBAC intersected
-with deployment scope, HMAC-signed per-session capability tokens verified
-against canonical targets, per-capability approval policies with audit-
-chain history and escalation chains that cannot approval-shop, secure
-sessions that revoke keys before wiping workspaces, and signed, hash-
-chained, versioned agent memory with rollback pinning) are complete;
-v5 (runtime containment) is next.
+end to end, deny path effectively free. v1 through v5 are complete; v6
+(adaptive security — behavioral learning, the trust graph, and the replay
+engine that v1's monitor mode has been quietly building a corpus for) is
+next.
 
 ## License
 
