@@ -39,6 +39,7 @@ that lies about itself.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from proxy.core.request import Request
@@ -48,7 +49,7 @@ from proxy.core.metrics import SecurityMetrics
 from proxy.policy.engine import PolicyEngine
 from proxy.audit.log import AuditLog
 from proxy.inspect import inbound, redactor, threats
-from proxy.runtime.approval import ApprovalGate
+from proxy.runtime.approval import ApprovalGate, ApprovalHistory
 from proxy.network.ratelimit import RateLimiter
 from proxy.network.canary import CanaryVault
 from proxy.network import downloads as download_guard
@@ -73,7 +74,19 @@ class Mediator:
                  canary: CanaryVault | None = None):
         self.engine = engine
         self.audit = audit
-        self.approval = approval or ApprovalGate()
+        # v4: the default approval gate carries the configured timeout and an
+        # approval-history view over the audit chain — "this tool was
+        # rejected three times today" belongs in the prompt. An injected gate
+        # (tests, alternative UIs) is used exactly as given.
+        identity_cfg = getattr(engine, "identity_cfg", {}) or {}
+        apr_cfg = identity_cfg.get("approval") or {}
+        if approval is not None:
+            self.approval = approval
+        else:
+            self.approval = ApprovalGate(
+                timeout_seconds=float(apr_cfg.get("timeout_seconds", 120)),
+                history=(ApprovalHistory(audit)
+                         if apr_cfg.get("history", True) else None))
         self.metrics = metrics or SecurityMetrics()
         self.mode = (engine.policy.get("mode") or "enforce").lower()
         if self.mode not in ("enforce", "monitor"):
@@ -89,14 +102,56 @@ class Mediator:
             self.canary = None
         self.downloads_cfg = network_cfg.get("downloads") or {}
         self.http_cfg = network_cfg.get("http") or {}
+        # v4: sessions. Lazily-built manager so deployments without an
+        # identity block never touch the sessions machinery.
+        self._sessions: "SessionManager | None" = None
+
+    # ------------------------------------------------------------------ #
+    # Session lifecycle (v4)
+    # ------------------------------------------------------------------ #
+    @property
+    def sessions(self):
+        if self._sessions is None:
+            from proxy.identity.sessions import SessionManager
+            identity_cfg = getattr(self.engine, "identity_cfg", {}) or {}
+            ses_cfg = identity_cfg.get("sessions") or {}
+            root = ses_cfg.get("root") or str(
+                Path(self.engine.workspace_root) / "sessions")
+            self._sessions = SessionManager(
+                root, rbac=self.engine.rbac, canary=self.canary,
+                audit=self.audit,
+                seed_canaries=bool(ses_cfg.get("seed_canaries", True)))
+        return self._sessions
+
+    def open_session(self, user: str):
+        """Open a SecureSession: per-session workspace, the role's grants
+        minted as signed tokens, canary decoys planted, open event on the
+        audit chain."""
+        return self.sessions.open(user)
+
+    def close_session(self, session) -> dict:
+        """Destroy a session: workspace wiped, every grant revoked at the
+        key, close event on the audit chain. Idempotent."""
+        return self.sessions.close(session)
 
     # ------------------------------------------------------------------ #
     # Request path
     # ------------------------------------------------------------------ #
     def mediate_call(self, tool: str, args: dict[str, Any] | None = None,
-                     user: str = "agent", mission: Mission | None = None) -> Outcome:
+                     user: str = "agent", mission: Mission | None = None,
+                     session=None) -> Outcome:
         """Normalize -> canary -> rate limit -> decide -> (approve) -> audit.
-        Fail closed throughout."""
+        Fail closed throughout.
+
+        With a session (v4): the session's user is the invoking identity,
+        capability checks in the engine run against the session's grants,
+        and a CLOSED session is refused before anything else — destruction
+        means destruction."""
+        if session is not None:
+            if getattr(session, "closed", False):
+                return self._fail_closed(
+                    tool, f"session {session.session_id} is closed — no calls survive destruction")
+            user = session.user
         try:
             request = Request.normalize(tool, args or {}, user=user)
         except Exception as e:
@@ -134,7 +189,7 @@ class Mediator:
             return self._fail_closed(tool, f"rate limiter failed: {e!r}")
 
         try:
-            decision = self.engine.decide(request, mission)
+            decision = self.engine.decide(request, mission, session=session)
         except Exception as e:
             return self._fail_closed(request.tool, f"policy evaluation failed: {e!r}")
 

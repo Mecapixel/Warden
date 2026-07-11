@@ -129,7 +129,7 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (313 passing tests):** the full v1 pipeline — request
+**Built and tested (377 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
@@ -153,7 +153,13 @@ v2 (model-layer security), and v3 (network security — the full outbound
 battery: per-tool egress scopes, SSRF resolve-then-validate with rebinding
 attribution, DNS sinkholing, redirect-hop re-checking, download guard,
 domain reputation, rate limiting, and canary tokens, all testable with
-injected resolvers) are complete; v4 (identity & trust) is next.
+injected resolvers), and v4 (identity & trust — agent RBAC intersected
+with deployment scope, HMAC-signed per-session capability tokens verified
+against canonical targets, per-capability approval policies with audit-
+chain history and escalation chains that cannot approval-shop, secure
+sessions that revoke keys before wiping workspaces, and signed, hash-
+chained, versioned agent memory with rollback pinning) are complete;
+v5 (runtime containment) is next.
 
 ## License
 

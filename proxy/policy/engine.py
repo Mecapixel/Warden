@@ -40,10 +40,13 @@ from proxy.core.risk import RiskAssessment
 from proxy.core.decision import Decision, Verdict
 from proxy.core.mission import Mission
 from proxy.guards.canonicalize import canonicalize_within, PathTraversalError
+from proxy.guards.egress import extract_host
 from proxy.core.textnorm import harden
 from proxy.inspect import redactor
 from proxy.network.guard import NetworkGuard
 from proxy.network.dnspin import Resolver
+from proxy.identity.rbac import Rbac
+from proxy.runtime.approval import ApprovalPolicies, ApprovalPolicyError
 
 
 # Fallback argument keys treated as filesystem paths when a tool's policy does
@@ -122,6 +125,56 @@ def _validate_policy(policy: Any) -> dict:
             ):
                 raise PolicyValidationError(f"policy.yaml: network.dns.{list_field} must be a list of strings")
 
+    # v4: the identity section, when present, must be structurally sound.
+    # The same rule as v3's network block: a typo that silently enforces
+    # LESS than the operator wrote is refused at startup, never discovered
+    # in an incident review.
+    identity = policy.get("identity")
+    if identity is not None:
+        if not isinstance(identity, dict):
+            raise PolicyValidationError("policy.yaml: 'identity' must be a mapping")
+        rbac = identity.get("rbac") or {}
+        roles = rbac.get("roles")
+        if roles is not None and not isinstance(roles, dict):
+            raise PolicyValidationError("policy.yaml: identity.rbac.roles must be a mapping")
+        for rname, rdef in (roles or {}).items():
+            if not isinstance(rdef, dict):
+                raise PolicyValidationError(
+                    f"policy.yaml: identity.rbac.roles.{rname} must be a mapping")
+            tools = rdef.get("tools")
+            if tools is not None and (
+                not isinstance(tools, list) or not all(isinstance(t, str) for t in tools)
+            ):
+                raise PolicyValidationError(
+                    f"policy.yaml: identity.rbac.roles.{rname}.tools must be a list of strings")
+        users = rbac.get("users")
+        if users is not None and not isinstance(users, dict):
+            raise PolicyValidationError("policy.yaml: identity.rbac.users must be a mapping")
+        default_role = rbac.get("default_role")
+        if default_role is not None and default_role not in (roles or {}):
+            raise PolicyValidationError(
+                f"policy.yaml: identity.rbac.default_role {default_role!r} is not a declared role")
+        for user, role in (users or {}).items():
+            if role not in (roles or {}):
+                raise PolicyValidationError(
+                    f"policy.yaml: identity.rbac.users.{user} maps to undeclared role {role!r}")
+        try:
+            ApprovalPolicies((identity.get("approval") or {}).get("policies"))
+        except ApprovalPolicyError as exc:
+            raise PolicyValidationError(f"policy.yaml: {exc}") from exc
+        memory = identity.get("memory") or {}
+        if memory.get("enabled") and memory.get("encrypt"):
+            try:
+                import cryptography.fernet  # noqa: F401
+            except ImportError:
+                raise PolicyValidationError(
+                    "policy.yaml: identity.memory.encrypt is enabled but the "
+                    "'cryptography' package is not installed. Install it with "
+                    "'pip install cryptography', or disable encryption — a "
+                    "security tool must never quietly downgrade the protection "
+                    "the operator configured."
+                )
+
     # v1.5.5: if the policy explicitly enables the presidio detector, the
     # backend must actually load. A security tool must never quietly
     # downgrade to weaker detection than the operator configured.
@@ -167,14 +220,29 @@ class PolicyEngine:
         # same instance for redirect-hop re-checks: one battery, one path.
         self.network_guard = NetworkGuard(self.egress_cfg, self.network_cfg,
                                           resolver=resolver)
+        # v4: identity layer. Rbac and ApprovalPolicies are engine-owned
+        # because they shape Decisions; sessions and memory vaults are
+        # runtime objects owned by the mediator/operator. Absent identity
+        # block -> both are inert and v1-v3 behavior is unchanged.
+        self.identity_cfg = self.policy.get("identity", {}) or {}
+        self.rbac = Rbac(self.identity_cfg.get("rbac"))
+        self.capabilities_enabled = bool(
+            (self.identity_cfg.get("capabilities") or {}).get("enabled"))
+        self.approval_policies = ApprovalPolicies(
+            (self.identity_cfg.get("approval") or {}).get("policies"))
 
-    def decide(self, request: Request, mission: Mission | None = None) -> Decision:
+    def decide(self, request: Request, mission: Mission | None = None,
+               session=None) -> Decision:
         """Evaluate a normalized Request and return a rich Decision.
 
         If a Mission is supplied, the mission check runs first (after
         normalization): an action outside the declared mission is denied before
         any other evaluation, because the strongest signal that something is
         wrong is 'the agent is doing something the user never asked for.'
+
+        If a session (v4 SecureSession) is supplied and capabilities are
+        enabled in policy, tools that declare a required capability are
+        checked against the session's signed grants.
         """
         risk = RiskAssessment()
         tool = request.tool
@@ -210,6 +278,25 @@ class PolicyEngine:
                 Verdict.DENY, rule="TOOL-001", action=tool, assessment=risk,
                 reason=f"Tool {tool!r} is not in policy (deny by default).",
                 recommended_fix="Add the tool to policy.yaml with an explicit tier if this access is intended.",
+                request_id=request.request_id,
+            )
+
+        # 1b. v4 RBAC — the invoking user's role, intersected with the agent
+        # deployment's scope. Placed after existence checks (an unknown tool
+        # is an unknown tool regardless of who asks) and before tiers: a tool
+        # the identity layer forbids never reaches capability or risk logic.
+        rv = self.rbac.check(request.user, tool)
+        if not rv.permitted:
+            signal = ("agent_scope_violation" if rv.rule == "RBAC-002"
+                      else "rbac_violation")
+            risk.add(signal, rv.reason)
+            return Decision.from_risk(
+                Verdict.DENY, rule=rv.rule, action=tool, assessment=risk,
+                reason=rv.reason,
+                recommended_fix=(
+                    "Add the tool to identity.rbac.agent_scope if this deployment should run it."
+                    if rv.rule == "RBAC-002" else
+                    "Assign the user a role that permits this tool in identity.rbac, or add the tool to their role."),
                 request_id=request.request_id,
             )
 
@@ -312,6 +399,57 @@ class PolicyEngine:
                             request_id=request.request_id,
                         )
 
+        # 3c. v4 capability check. A tool that declares `capability:` in its
+        # spec requires the session to hold a verified, unexpired, correctly
+        # scoped grant for the CANONICAL target — the path after
+        # canonicalization, the host after extraction — so a grant scoped to
+        # /workspace/data cannot be stretched with '..' games or URL dressing
+        # (those were killed upstream). No session, no grant, closed session:
+        # all the same answer.
+        required_cap = str(spec.get("capability") or "").strip().lower()
+        if self.capabilities_enabled and required_cap:
+            if required_cap == "network.egress":
+                cap_target = None
+                url_keys = spec.get("url_args") or _DEFAULT_URL_ARG_KEYS
+                for key in url_keys:
+                    if key in args:
+                        cap_target = (extract_host(str(args[key])) or "").lower()
+                        break
+                cap_target = cap_target or "*"
+            else:
+                cap_target = safe_path or "*"
+
+            if session is None:
+                risk.add("capability_missing",
+                         f"tool {tool!r} requires capability {required_cap!r} "
+                         f"but the call carries no session")
+                return Decision.from_risk(
+                    Verdict.DENY, rule="CAP-001", action=tool, assessment=risk,
+                    reason=f"Tool {tool!r} requires capability {required_cap!r}; no session context was provided.",
+                    target=target,
+                    recommended_fix="Open a session (which mints the role's grants) and route calls through it.",
+                    safe_path=safe_path,
+                    request_id=request.request_id,
+                )
+            grant = session.covers(required_cap, cap_target)
+            if not grant.ok:
+                forged = "signature" in grant.reason or "replayed" in grant.reason
+                risk.add("capability_forged" if forged else "capability_missing",
+                         grant.reason)
+                return Decision.from_risk(
+                    Verdict.DENY,
+                    rule="CAP-002" if forged else "CAP-001",
+                    action=tool, assessment=risk,
+                    reason=f"Capability check failed for {required_cap!r} on {cap_target!r}: {grant.reason}",
+                    target=target,
+                    recommended_fix=(
+                        "A forged or replayed token has no legitimate origin — quarantine the session."
+                        if forged else
+                        "Grant the capability to the user's role in identity.rbac.roles, scoped as narrowly as the task allows."),
+                    safe_path=safe_path,
+                    request_id=request.request_id,
+                )
+
         # 4. Secret/PII screening on arguments. Credentials block the call;
         # PII adds risk and is surfaced to the human at the tier gate rather
         # than hard-blocking legitimate work that merely mentions an email.
@@ -334,6 +472,23 @@ class PolicyEngine:
                     )
                 if pii:
                     risk.add("pii_in_transit", f"PII detected in arguments: {', '.join(pii)}")
+
+        # 4b. v4 approval policies — the operator's "a human signs off on
+        # THIS" declarations, keyed by capability or tool, optionally gated
+        # on the accumulated risk score. Policies only ADD approval
+        # requirements: a firing policy forces ESCALATE (APR-001), and
+        # nothing here can lower a tier the operator set.
+        apr = self.approval_policies.requirement(
+            [required_cap if self.capabilities_enabled else "", tool],
+            risk.score)
+        if apr.required and tier != "escalate":
+            risk.add("approval_policy", apr.why)
+            return Decision.from_risk(
+                Verdict.ESCALATE, rule="APR-001", action=tool, assessment=risk,
+                reason=f"Approval policy requires a human decision: {apr.why}.",
+                target=target, safe_path=safe_path, path_rewrites=path_rewrites,
+                request_id=request.request_id,
+            )
 
         # 5. Tier -> band reconciliation.
         # No hard-boundary signal fired. The tier sets the floor; accumulated

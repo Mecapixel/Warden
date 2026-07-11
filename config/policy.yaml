@@ -268,3 +268,77 @@ inbound_inspection:
 audit:
   enabled: true
   path: "audit/warden_audit.db"
+
+# ---------------------------------------------------------------------------
+# v4 — Identity & Trust. Absent or disabled, the identity layer is inert and
+# v1–v3 behavior is unchanged. Enabled, it adds four controls: RBAC (whose
+# request is this, and is this deployment even scoped to run it), capability
+# tokens (may this tool do THIS to THAT, proven by a signed per-session
+# grant), approval policies (the operator's "a human signs off on this"
+# declarations), and memory integrity (signed, chained, versioned agent
+# memory that cannot be silently edited or rolled back).
+# ---------------------------------------------------------------------------
+identity:
+
+  # RBAC: the invoking user's role, intersected with the agent deployment's
+  # scope. The intersection is the law from v3 egress scopes, applied to
+  # identity: agent_scope can only NARROW what a role grants, never widen
+  # it. Unknown users have no role and no role means no tools (RBAC-001) —
+  # set default_role only to opt INTO anonymous access deliberately.
+  rbac:
+    enabled: false
+    default_role: null
+    # agent_scope: [read_file, http_get]    # omit for no narrowing
+    roles:
+      agent:
+        tools: [read_file, http_get]
+        capabilities:
+          - {capability: filesystem.read, target: "*"}
+          - {capability: network.egress,  target: "*"}
+      operator:
+        tools: ["*"]
+        capabilities:
+          - {capability: "filesystem.*", target: "*"}
+          - {capability: network.egress, target: "*"}
+    users:
+      agent: agent
+
+  # Capability tokens: per-request, HMAC-signed, scoped, expiring grants
+  # minted by each session. A tool spec that declares `capability:` (e.g.
+  # `read_file: {tier: auto, capability: filesystem.read, ...}`) is checked
+  # against the session's grants for the CANONICAL target. CAP-001 is a
+  # missing/expired/mis-scoped grant; CAP-002 is a forged or replayed token
+  # — the latter has no benign explanation.
+  capabilities:
+    enabled: false
+
+  # Approval policies: per-capability (or per-tool) declarations of when a
+  # human must sign off. Policies only ADD requirements — nothing here can
+  # lower a tier the operator set. History puts prior approve/reject counts
+  # for the tool into the approval prompt, read from the audit chain.
+  approval:
+    timeout_seconds: 120
+    history: true
+    policies: {}
+    # policies:
+    #   filesystem.delete: always
+    #   network.egress: "risk>=50"
+
+  # Sessions: per-session workspace under `root` (default:
+  # <workspace_root>/sessions), the role's grants minted at open, canary
+  # decoys planted automatically, open/close on the audit chain, and the
+  # whole thing DESTROYED at close — workspace wiped, signing key discarded,
+  # every outstanding token dead with it.
+  sessions:
+    seed_canaries: true
+    # root: sessions/
+
+  # Memory integrity: agent long-term memory as an append-only, signed,
+  # hash-chained, versioned store with a signed head pin against rollback.
+  # Tampering is MEM-001; truncation/rollback is MEM-002. Encryption at
+  # rest is optional and FAIL-LOUD: enabling it without the 'cryptography'
+  # package is a policy error at startup, never a silent downgrade.
+  memory:
+    enabled: false
+    encrypt: false
+    # store_path: memory/agent_memory.json

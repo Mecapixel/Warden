@@ -3,6 +3,85 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [4.0.0] — 2026-07-11
+
+**v4 — Identity & Trust.** Who is asking, what exactly are they entitled to
+do, who signed off, and can the agent's memory be trusted. The minimal
+approval gate shipped in v1; this release generalizes it and adds the
+identity layer around it. Absent an `identity:` block in policy, every new
+control is inert and v1–v3 behavior is unchanged. 64 new tests.
+
+### Added
+- `proxy/identity/rbac.py`: agent RBAC — the invoking user's role
+  INTERSECTED with the agent deployment's scope, the same narrow-never-
+  widen law as v3 egress scopes. Unknown users have no role and no role
+  means no tools (RBAC-001) unless the operator deliberately opts into
+  anonymous access with `default_role`; a tool the user's role permits but
+  the deployment scope excludes is RBAC-002. An empty declared scope means
+  the agent may run nothing — the distinction from "no scope declared" is
+  preserved.
+- `proxy/identity/capabilities.py`: capability tokens — per-request,
+  HMAC-SHA256-signed, scoped grants (`filesystem.read` on
+  `/workspace/data/*`, `network.egress` on a host) minted by a per-session
+  issuer whose key exists only in memory. Unforgeable (one flipped byte
+  fails constant-time verification), bounded in time (injectable clock),
+  single-use by default (replay is CAP-002), and revocable at the root:
+  session close discards the key and every outstanding token dies with
+  it. The engine checks grants against the CANONICAL target — the path
+  after canonicalization, the host after extraction — so a grant cannot
+  be stretched with `..` games or URL dressing.
+- `proxy/runtime/approval.py` generalized: per-capability approval
+  policies (`always`, `risk>=N`; `never` is deliberately inert — the
+  approval layer only ADDS requirements and can never lower a tier),
+  forcing ESCALATE via APR-001; ApprovalHistory as a read-only view over
+  the existing audit chain, with a history line in the prompt ("rejected
+  three times today" is information an approver should have);
+  policy-configurable timeout that still resolves to DENY; and an
+  escalation chain of askers for ABSENCE, never for overruling — an
+  explicit human "no" stops the chain, only non-answers move to the next
+  approver.
+- `proxy/identity/sessions.py`: secure sessions — per-session workspace,
+  the role's grants minted as signed tokens at open, v3 canary decoys
+  planted automatically, open/close events on the main hash chain.
+  `destroy()` revokes the issuer FIRST and then wipes the workspace, so
+  even a failed wipe cannot leave a usable token behind; a closed session
+  refuses everything, not as policy but because the key no longer exists.
+- `proxy/identity/memguard.py`: memory integrity — append-only,
+  HMAC-signed, hash-chained, versioned agent memory with a signed head
+  file pinning chain length and tip. Tamper, reorder, insertion, and
+  mid-store deletion are MEM-001; truncation/rollback against the pinned
+  head is MEM-002; reads verify before they return and a bad chain raises
+  rather than handing the agent poisoned state. Optional encryption at
+  rest (Fernet) follows the Presidio contract: enabling it without the
+  backend is a policy error at startup, never a silent downgrade.
+- Engine + mediator integration: RBAC runs before tiers (a tool the
+  identity layer forbids never reaches risk logic), capability checks run
+  at the canonical-target stage, approval policies evaluate after risk
+  accumulation, sessions thread through `mediate_call()`, and a closed
+  session is refused before normalization. Policy validation rejects
+  malformed `identity:` config at load.
+- `tests/test_v4_identity_trust.py`: 64 tests — forgery, replay, expiry,
+  revocation, scope stretching, RBAC intersection, approval-shopping
+  prevention, session destruction, memory tamper/rollback, and the
+  no-identity-block compatibility guarantee.
+
+### Fixed
+- **Memory verification was self-referential and could never pass** —
+  found because a clean, just-written store failed its own integrity
+  check: `put()` computes `this_hash` over the record before the hash
+  field is attached, but verification recomputed it over the record WITH
+  `this_hash` inside, so every store on earth failed MEM-001. The
+  dangerous version of this bug is its "fix" — a verifier that never
+  passes invites someone to weaken it until it does. Recomputation now
+  excludes `this_hash` exactly as the write path does; the clean-store
+  round-trip tests pin it.
+- **Head-deletion rollback bypass** — found in review: rolling the store
+  back AND deleting the head file produced an internally-valid chain with
+  no rollback witness, so MEM-002 never fired. Every `put()` writes the
+  head alongside the store, so a store with records and no head is itself
+  a rollback signature and now raises MEM-002 — deleting the witness does
+  not acquit the defendant. Pinned as a regression test.
+
 ## [3.0.0] — 2026-07-11
 
 **v3 — Network Security.** Full control of outbound communication. The
