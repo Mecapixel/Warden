@@ -16,6 +16,7 @@ Behaviors, keyed by tool call:
 """
 
 import json
+import os
 import sys
 import time
 
@@ -48,11 +49,11 @@ def main():
         elif method == "tools/call":
             name = (msg.get("params") or {}).get("name")
             args = (msg.get("params") or {}).get("arguments") or {}
-            # Warden rewrites path arguments to their CANONICAL absolute form
-            # before forwarding (the checked path and the executed path must be
-            # the same string), so dispatch on the basename — a real server
-            # would similarly receive absolute, workspace-contained paths.
-            basename = args.get("path", "").rsplit("/", 1)[-1]
+            
+            # Handle Windows paths correctly for basename
+            raw_path = args.get("path", "")
+            basename = os.path.basename(raw_path.replace("\\", "/"))
+            
             if name == "slow_tool":
                 time.sleep(5)
                 out = reply(msg_id, "finally awake")
