@@ -10,5 +10,5 @@ build/
 *.egg-info/
 ROADMAP.md
 .warden.default.policy.yaml
-audit/
-workspace/
+/audit/
+/workspace/
