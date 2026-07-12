@@ -24,4 +24,7 @@ jobs:
       - run: python -m build
       - run: pip install dist/*.whl
       - run: warden --version
-      - run: cd /tmp && warden init && warden inspect read_file '{"path": "workspace/notes.txt"}'
+      - run: |
+          cd /tmp
+          warden init
+          warden inspect read_file '{"path": "workspace/notes.txt"}'
