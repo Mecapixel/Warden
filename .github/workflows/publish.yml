@@ -1,0 +1,23 @@
+# Publish to PyPI via trusted publishing (OIDC): no API tokens, no secrets —
+# PyPI trusts this exact workflow in this exact repo. Runs when a GitHub
+# Release is published (release.yml creates one on every version tag), or
+# manually from the Actions tab for the first upload.
+name: publish
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write     # OIDC token for trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
