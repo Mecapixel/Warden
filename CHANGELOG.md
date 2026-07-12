@@ -3,6 +3,72 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [6.0.0] — 2026-07-11
+
+**v6 — Adaptive Security.** Learn behavior, reason over relationships,
+simulate policy changes before they ship, and automate response. This is the
+payoff of monitor mode: the corpus v1 has been quietly recording since the
+first release is finally spent. Absent an `adaptive:` block, nothing changes.
+47 new tests. One law runs through the entire layer — it only ever ADDS
+caution: every learned or contextual signal can raise a verdict toward
+restriction and route to a human, and none can lower one below the static
+policy floor. Learned state never overrides a hard control (the v3
+reputation-precedence lesson, applied to everything that learns).
+
+### Added
+- `proxy/adaptive/behavior.py`: per-agent behavioral baselines. Learns each
+  agent's normal tool set, egress host classes, and risk ceiling, then flags
+  deviation — an unfamiliar tool (ANOM-001), egress to a host class never
+  seen (ANOM-002), a risk spike past the agent's historical ceiling
+  (ANOM-003). Three honesties are enforced structurally: learning is GATED
+  (a warm-up count is required before the profile judges anything, denied
+  calls never teach "normal" so an attacker's rejected probes can't train
+  acceptance, and a `frozen` profile stops learning for agents under
+  suspicion while still judging against its pre-freeze baseline); the output
+  is POINTS, never a verdict (deviation is not guilt); and every anomaly
+  names the dimension and the baseline it broke.
+- `proxy/adaptive/trustgraph.py`: reason over the whole chain — user → agent
+  → tool → file → network — for the properties no per-call guard can see.
+  Taint reachability (TG-001) is the read-then-exfiltrate detector: an
+  untrusted source reaching an egress sink along ANY path, cycle-safe and
+  returning the actual path so a reviewer sees the chain. Privilege bridges
+  (TG-002) find a user transitively reaching a tool their role never granted
+  because an agent bridged scopes — the transitive closure v4's per-hop RBAC
+  can't see. Blast radius (TG-003) scopes quarantine when something trips.
+  Edges carry the audit event_id that created them: the graph is a lens over
+  the tamper-evident log, never a second source of truth.
+- `proxy/adaptive/replay.py`: replay a recorded audit corpus against a
+  candidate policy and answer "what would this have done to the traffic we
+  actually saw?" — regression safety (how many allowed calls the candidate
+  would now gate: `would_break_count`, the rollout-risk number) and coverage
+  gain, before rollout. Two honesties: it is retrodiction not prophecy (past
+  traffic, stated as such), and it is READ-ONLY and side-effect-free
+  (reconstructs Requests from audit detail, re-decides against a candidate
+  engine, never executes a tool or writes a chain). Records it can't
+  reconstruct are SKIPPED and counted, never fabricated.
+- `proxy/adaptive/policy.py`: three tighten-only controls. Adaptive context
+  floors (ADAPT-001) enforce the same rule more strictly in a riskier
+  context; a floor can only raise a verdict, and a rule that tried to
+  downgrade a DENY is refused (ADAPT-002). Quarantine (QUAR-001) is sticky —
+  it forces a principal's calls to at least ESCALATE, freezes its behavioral
+  profile so the compromise can't teach itself normal, and persists until a
+  NAMED human clears it, never self-expiring (a timeout would let a patient
+  adversary wait it out; the class has no expiry method at all, asserted by
+  test). Intent verification (INTENT-001) flags an action that doesn't match
+  the session's stated goal — the "you asked me to summarize but I'm now
+  deleting" catch — as an escalate hint, conservative by design so false
+  off-goal alarms don't train humans to ignore the signal.
+- `proxy/audit/log.py`: a read-only `records()` reader so the replay engine
+  can consume the monitor-mode corpus without ever touching the chain it
+  reads; reading is proven not to mutate the chain by test.
+- Policy validation rejects malformed `adaptive:` config at load (a context
+  floor that isn't a real verdict, a negative warm-up).
+- `tests/test_v6_adaptive_security.py`: 47 tests — baseline learning and
+  every gating guarantee, taint/bridge/blast-radius graph properties,
+  replay regression/coverage/skip-honesty/side-effect-freedom, the
+  tighten-only ratchet, quarantine stickiness, intent matching, and replay
+  against a real recorded audit corpus.
+
 ## [5.0.0] — 2026-07-11
 
 **v5 — Runtime Containment.** Isolate execution environments and limit

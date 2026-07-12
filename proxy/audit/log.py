@@ -139,5 +139,27 @@ class AuditLog:
             count += 1
         return {"intact": True, "entries": count, "broken_at_seq": None, "problem": None}
 
+    def records(self, tool: str | None = None,
+                limit: int | None = None) -> list[dict[str, Any]]:
+        """Read decisions back out as dicts, oldest first. Read-only — this
+        is how the v6 replay engine consumes the monitor-mode corpus without
+        ever touching the chain it is reading. `detail` is returned as its
+        raw JSON string; the caller parses what it needs.
+        """
+        sql = ("SELECT seq, event_id, parent_event_id, ts, tool, decision, "
+               "reason, detail FROM audit")
+        params: list[Any] = []
+        if tool is not None:
+            sql += " WHERE tool = ?"
+            params.append(tool)
+        sql += " ORDER BY seq ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        cols = ("seq", "event_id", "parent_event_id", "ts", "tool",
+                "decision", "reason", "detail")
+        return [dict(zip(cols, row))
+                for row in self._conn.execute(sql, params)]
+
     def close(self):
         self._conn.close()

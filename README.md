@@ -29,9 +29,9 @@ make the *model* safer. Warden takes the complementary approach used
 everywhere else in security: put a policy-enforcing checkpoint between the
 untrusted actor and the sensitive resource, and log everything, tamper-evidently.
 
-## What's built (v1 → v5)
+## What's built (v1 → v6)
 
-A working runtime, proven by a 438-test synthetic attack, fuzz, and performance suite:
+A working runtime, proven by a 485-test synthetic attack, fuzz, and performance suite:
 
 - **Path canonicalization** — blocks `../../etc/passwd`, absolute-path escapes,
   and symlink escapes; everything is confined to a workspace root.
@@ -112,6 +112,18 @@ A working runtime, proven by a 438-test synthetic attack, fuzz, and performance 
   monitor for fork breaches, zombies, overstay, and unexpected
   executables. Rendered argv is the tested artifact — no container
   runtime needed to prove the posture.
+- **v6 adaptive-security layer** — the payoff of monitor mode. Per-agent
+  behavioral baselines learn each agent's normal and flag deviation
+  (unfamiliar tool, unseen egress class, risk spike) as escalate hints,
+  never autonomous denies; learning is gated, denied calls never teach
+  "normal", and a suspect profile freezes. A user→agent→tool→file→network
+  trust graph finds read-then-exfiltrate paths, privilege bridges, and
+  blast radius no per-call guard can see. A read-only replay engine spends
+  the recorded audit corpus to answer "what would this policy have done to
+  the traffic we actually saw?" before rollout. Tighten-only adaptive
+  controls — context floors, sticky human-clear-only quarantine, and intent
+  verification against a stated goal — can only ever add caution, never
+  lower a verdict below the static floor.
 - **Tiered policy engine** — reads auto-allow, writes/deletes escalate to a
   human, dangerous tools denied; deny by default.
 
@@ -158,7 +170,7 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (438 passing tests):** the full v1 pipeline — request
+**Built and tested (485 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
@@ -185,10 +197,9 @@ running them end to end against live Docker/gVisor/Wasmtime backends is
 deployment work, not library work, and is stated as such. Measured overhead
 is published in
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): ≈ 2 ms per mediated tool call
-end to end, deny path effectively free. v1 through v5 are complete; v6
-(adaptive security — behavioral learning, the trust graph, and the replay
-engine that v1's monitor mode has been quietly building a corpus for) is
-next.
+end to end, deny path effectively free. v1 through v6 are complete; v7
+(the Warden platform — packaging, signed releases, and framework adapters)
+is productization work, taken up only if this becomes real.
 
 ## License
 

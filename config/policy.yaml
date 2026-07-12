@@ -382,3 +382,34 @@ containment:
     max_zombies: 0
     max_runtime_seconds: 300
     # allowed_executables: ["/usr/local/bin/python*"]
+
+# ---------------------------------------------------------------------------
+# v6 — Adaptive Security. Absent or disabled, nothing changes. Every control
+# here only ever ADDS caution: it can raise a verdict toward restriction and
+# route to a human, never lower one below the static floor above. Learned
+# state never overrides a hard control.
+# ---------------------------------------------------------------------------
+adaptive:
+  enabled: false
+  # Behavioral baselines: learn each agent's normal, flag deviations as
+  # ESCALATE hints (never autonomous denies). Learning is gated by a warm-up
+  # and skips denied calls; a suspect agent's profile can be frozen.
+  behavior:
+    warmup_calls: 30
+    novel_tool_points: 25
+    novel_host_points: 40
+    risk_spike_points: 30
+    risk_spike_margin: 30
+  # Intent verification: does the action match the session's stated goal?
+  # Off-goal sensitive actions escalate to a human.
+  intent:
+    off_goal_points: 35
+  # Adaptive context floors — same rule, stricter in a riskier context.
+  # 'floor' can only raise a verdict; ALLOW is a no-op, DENY is the hardest.
+  context_rules:
+    - when: quarantined
+      floor: ESCALATE
+    - when: off_goal
+      floor: ESCALATE
+  # Quarantine is sticky: it persists until a named human clears it and never
+  # self-expires (a timeout would let a patient adversary wait it out).

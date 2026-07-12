@@ -125,6 +125,33 @@ def _validate_policy(policy: Any) -> dict:
             ):
                 raise PolicyValidationError(f"policy.yaml: network.dns.{list_field} must be a list of strings")
 
+    # v6: the adaptive section, when present, must be structurally sound.
+    # The adaptive layer only ever ADDS caution, so validation guards the one
+    # way it could betray that: a context rule whose 'floor' is not a real
+    # verdict, or a malformed behavioral config.
+    adaptive = policy.get("adaptive")
+    if adaptive is not None:
+        if not isinstance(adaptive, dict):
+            raise PolicyValidationError("policy.yaml: 'adaptive' must be a mapping")
+        _VERDICTS = {"ALLOW", "REDACT", "ESCALATE", "DENY"}
+        for entry in (adaptive.get("context_rules") or []):
+            if not isinstance(entry, dict) or "when" not in entry or "floor" not in entry:
+                raise PolicyValidationError(
+                    "policy.yaml: each adaptive.context_rules entry needs "
+                    "'when' and 'floor'")
+            if entry["floor"] not in _VERDICTS:
+                raise PolicyValidationError(
+                    f"policy.yaml: adaptive context floor {entry['floor']!r} "
+                    f"is not one of {sorted(_VERDICTS)} (ADAPT-002)")
+        behavior = adaptive.get("behavior")
+        if behavior is not None:
+            if not isinstance(behavior, dict):
+                raise PolicyValidationError(
+                    "policy.yaml: adaptive.behavior must be a mapping")
+            if int(behavior.get("warmup_calls", 0)) < 0:
+                raise PolicyValidationError(
+                    "policy.yaml: adaptive.behavior.warmup_calls cannot be negative")
+
     # v5: the containment section, when present, must be structurally sound
     # — same contract again: a typo that would contain LESS than the
     # operator wrote is refused at startup.
