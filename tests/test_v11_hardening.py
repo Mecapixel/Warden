@@ -27,14 +27,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from proxy.audit.log import AuditLog
-from proxy.core.mission import Mission
-from proxy.inspect import redactor
-from proxy.policy.engine import PolicyEngine
-from proxy.runtime.approval import ApprovalGate
-from proxy.runtime.mediator import Mediator
-from proxy.runtime.pinning import ToolRegistry
-from proxy.transport.mcp import MCPInterceptor
+from warden.audit.log import AuditLog
+from warden.core.mission import Mission
+from warden.inspect import redactor
+from warden.policy.engine import PolicyEngine
+from warden.runtime.approval import ApprovalGate
+from warden.runtime.mediator import Mediator
+from warden.runtime.pinning import ToolRegistry
+from warden.transport.mcp import MCPInterceptor
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -136,7 +136,7 @@ class TestPathRewriteOnForward:
         assert args["dst"] == str(tmp_path / "y.txt")
 
     def test_engine_records_rewrites_per_key(self, mediator, tmp_path):
-        from proxy.core.request import Request
+        from warden.core.request import Request
         decision = mediator.engine.decide(
             Request.normalize("copy_file", {"src": "x.txt", "dst": "y.txt"}))
         assert decision.path_rewrites == {

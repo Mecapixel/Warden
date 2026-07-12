@@ -7,11 +7,11 @@ Egress allowlist (the exfiltration kill-chain closer) and Unicode hardening
 
 import pytest
 
-from proxy.guards.egress import extract_host, host_allowed, check_url, EgressViolation
-from proxy.core.textnorm import harden, was_obfuscated
-from proxy.core.request import Request
-from proxy.policy.engine import PolicyEngine
-from proxy.inspect import inbound, redactor
+from warden.guards.egress import extract_host, host_allowed, check_url, EgressViolation
+from warden.core.textnorm import harden, was_obfuscated
+from warden.core.request import Request
+from warden.policy.engine import PolicyEngine
+from warden.inspect import inbound, redactor
 
 
 @pytest.fixture

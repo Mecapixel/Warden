@@ -1,0 +1,10 @@
+# Warden pinned dependency set — the exact versions the release was tested
+# against. CI and reproducible installs use this; `pyproject.toml` carries
+# the loose ranges. Regenerate with: pip freeze after a clean install.
+hypothesis==6.156.6
+iniconfig==2.3.0
+packaging==26.0
+pluggy==1.6.0
+pytest==9.1.1
+PyYAML==6.0.3
+sortedcontainers==2.4.0

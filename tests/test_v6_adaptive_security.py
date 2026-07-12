@@ -18,14 +18,14 @@ import json
 
 import pytest
 
-from proxy.adaptive.behavior import BehaviorBaseline, AgentProfile
-from proxy.adaptive.trustgraph import (
+from warden.adaptive.behavior import BehaviorBaseline, AgentProfile
+from warden.adaptive.trustgraph import (
     TrustGraph, Node, USER, AGENT, TOOL, FILE, NETWORK)
-from proxy.adaptive.replay import ReplayEngine, simulate
-from proxy.adaptive.policy import (
+from warden.adaptive.replay import ReplayEngine, simulate
+from warden.adaptive.policy import (
     AdaptivePolicy, ContextRule, Quarantine, IntentVerifier)
-from proxy.core.decision import Verdict
-from proxy.policy.engine import PolicyEngine, PolicyValidationError
+from warden.core.decision import Verdict
+from warden.policy.engine import PolicyEngine, PolicyValidationError
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +414,7 @@ class TestPolicyValidation:
 # ---------------------------------------------------------------------------
 class TestAuditReplayIntegration:
     def test_replay_consumes_real_audit_records(self, tmp_path):
-        from proxy.audit.log import AuditLog
+        from warden.audit.log import AuditLog
         audit = AuditLog(str(tmp_path / "audit.db"))
         # Record two decisions the way monitor mode would, with args in detail.
         audit.record("read_file", "ALLOW", "clean read",
@@ -430,7 +430,7 @@ class TestAuditReplayIntegration:
         audit.close()
 
     def test_records_reader_is_read_only(self, tmp_path):
-        from proxy.audit.log import AuditLog
+        from warden.audit.log import AuditLog
         audit = AuditLog(str(tmp_path / "audit.db"))
         audit.record("read_file", "ALLOW", "x", {"args": {"path": "a"}})
         audit.records()

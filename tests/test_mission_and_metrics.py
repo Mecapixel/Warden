@@ -7,11 +7,11 @@ security metrics, and per-rule regression coverage.
 
 import pytest
 
-from proxy.core.request import Request
-from proxy.core.mission import Mission
-from proxy.core.metrics import SecurityMetrics
-from proxy.core.decision import Verdict
-from proxy.policy.engine import PolicyEngine
+from warden.core.request import Request
+from warden.core.mission import Mission
+from warden.core.metrics import SecurityMetrics
+from warden.core.decision import Verdict
+from warden.policy.engine import PolicyEngine
 
 
 @pytest.fixture

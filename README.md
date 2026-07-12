@@ -29,9 +29,9 @@ make the *model* safer. Warden takes the complementary approach used
 everywhere else in security: put a policy-enforcing checkpoint between the
 untrusted actor and the sensitive resource, and log everything, tamper-evidently.
 
-## What's built (v1 → v6)
+## What's built (v1 → v7)
 
-A working runtime, proven by a 485-test synthetic attack, fuzz, and performance suite:
+An installable runtime (`pip install warden-security`), proven by a 518-test synthetic attack, fuzz, and performance suite:
 
 - **Path canonicalization** — blocks `../../etc/passwd`, absolute-path escapes,
   and symlink escapes; everything is confined to a workspace root.
@@ -124,6 +124,18 @@ A working runtime, proven by a 485-test synthetic attack, fuzz, and performance 
   controls — context floors, sticky human-clear-only quarantine, and intent
   verification against a stated goal — can only ever add caution, never
   lower a verdict below the static floor.
+- **v7 platform layer** — Warden as a product, not a repo. `pip install
+  warden-security` with the runtime still exactly stdlib + PyYAML (enforced
+  by package metadata); signed, attested releases (SHA256SUMS + Sigstore
+  provenance, exact-pin lock file); framework adapters that run the same
+  Normalize → Policy → Approve → Execute → Audit pipeline inside OpenAI
+  Agents SDK, LangChain, AutoGen, and CrewAI processes with zero framework
+  dependencies (MCP is served by the transport itself); a localhost-only,
+  token-gated dashboard — audit chain, telemetry, sessions, live policy, and
+  candidate-policy replay through the v6 engine — doubling as the desktop
+  app; a VS Code extension (preview) for live policy decisions while
+  developing; and signed, hash-pinned policy bundles with deny-by-default
+  install as the shareable-policy format.
 - **Tiered policy engine** — reads auto-allow, writes/deletes escalate to a
   human, dangerous tools denied; deny by default.
 
@@ -144,14 +156,40 @@ fact). Detection layers are welcome on top; they are defense-in-depth, never
 the control. Warden assumes detection will sometimes fail and is built so
 that failing detection does not mean failing open.
 
+## Install
+
+```bash
+pip install warden-security          # the runtime is stdlib + PyYAML, nothing else
+```
+
+Optional capability is opt-in via extras: `[sign]` (Ed25519 policy-bundle
+signing), `[pii]` (Presidio-backed PII detection), `[desktop]` (native
+dashboard window), `[dev]`. The distribution is `warden-security` (the name
+`warden` on PyPI belongs to an unrelated project); the import package and the
+command are both `warden`. Releases ship with SHA256SUMS and Sigstore
+provenance attestations (`gh attestation verify --repo Mecapixel/warden <file>`).
+
 ## Run it
 
 ```bash
-python -m proxy.cli init                                  # starter policy + workspace
-python -m proxy.cli inspect read_file '{"path": "a.txt"}' # one explained decision
-python -m proxy.cli run -- <your-mcp-server-command>      # mediate a live server
-python -m proxy.cli verify                                # audit-chain integrity
-python -m proxy.cli stats                                 # operational telemetry
+warden init                                  # starter policy + workspace
+warden inspect read_file '{"path": "a.txt"}' # one explained decision
+warden run -- <your-mcp-server-command>      # mediate a live MCP server
+warden verify                                # audit-chain integrity
+warden stats                                 # operational telemetry
+warden dashboard                             # localhost web dashboard (token-gated)
+warden desktop                               # the same dashboard in a native window
+warden bundle pack|sign|verify|install       # shareable, signed policy bundles
+```
+
+Inside an agent process (OpenAI Agents SDK, LangChain, AutoGen, CrewAI), the
+same pipeline guards plain-Python tool callables:
+
+```python
+from warden.adapters import WardenGate, guard_autogen_map
+
+gate = WardenGate("warden.policy.yaml", "audit.db")
+safe_tools = guard_autogen_map(gate, {"read_file": read_file})   # DENY never runs
 ```
 
 With no policy file present, Warden runs on a built-in deny-all default —
@@ -160,7 +198,7 @@ unconfigured Warden is a wall, not a hole.
 ## Run the tests
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.lock
 python -m pytest
 ```
 
@@ -170,7 +208,7 @@ this repository, by design.
 
 ## Honest status
 
-**Built and tested (485 passing tests):** the full v1 pipeline — request
+**Built and tested (518 passing tests):** the full v1 pipeline — request
 normalization, path canonicalization, safe-exec guarding, secret/PII detection
 and response redaction, inbound-injection heuristics, risk scoring, the
 explainable Decision object, the hash-chained audit log, real MCP stdio
@@ -181,8 +219,11 @@ vectors), v2 model security (measured detection posture with published
 per-class miss rates), v3 network security (the full outbound battery, whose
 first test run found and fixed an escalate-masks-deny ordering flaw), v4
 identity & trust (whose review found and fixed a self-referential hash bug
-and a head-deletion rollback bypass in memory verification), and v5 runtime
-containment. Every phase is summarized in the What's built section above and
+and a head-deletion rollback bypass in memory verification), v5 runtime
+containment, v6 adaptive security, and v7 platform (packaging verified by
+installing the built wheel into a clean venv and exercising the CLI through
+it; framework adapters; signed policy bundles; the token-gated localhost
+dashboard). Every phase is summarized in the What's built section above and
 documented release by release in [`CHANGELOG.md`](CHANGELOG.md).
 `python demo.py` exercises the decision core end to end;
 `tests/test_transport.py` proves the full story over real pipes.
@@ -197,9 +238,13 @@ running them end to end against live Docker/gVisor/Wasmtime backends is
 deployment work, not library work, and is stated as such. Measured overhead
 is published in
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): ≈ 2 ms per mediated tool call
-end to end, deny path effectively free. v1 through v6 are complete; v7
-(the Warden platform — packaging, signed releases, and framework adapters)
-is productization work, taken up only if this becomes real.
+end to end, deny path effectively free. The VS Code
+extension ships as source in `integrations/vscode/` (preview: run from
+source or package with vsce; not yet on the Marketplace). The policy
+marketplace exists as the format and tooling — signed, hash-pinned `.wpb`
+bundles with deny-by-default install — not as a hosted registry; publishing
+one is a service decision, not library work. Roadmap v1 through v7 are
+complete.
 
 ## License
 

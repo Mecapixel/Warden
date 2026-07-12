@@ -1,9 +1,11 @@
-# Warden — Zero-Trust Security Runtime for AI Agents (v1 core)
-# Runtime is deliberately stdlib + PyYAML only; the transport uses asyncio.
+# Warden — Zero-Trust Security Runtime for AI Agents
+# The runtime is deliberately stdlib + PyYAML only. For development, prefer
+# the exact pins in requirements.lock (what CI and releases are tested
+# against); this file carries the loose set.
 pyyaml
 pytest
 hypothesis
-# Added per phase, only when earned:
-#   presidio-analyzer + a spaCy model        (v1.5.5 richer PII — OPTIONAL, shipped)
-#   jsonschema                               (v2 tool-call validation)
-#   redis                                    (v3 rate limiting / state)
+# Optional capability, opt-in via extras (see pyproject.toml):
+#   warden-security[pii]      presidio-analyzer  (v1.5.5 richer PII)
+#   warden-security[sign]     cryptography       (v7 signed policy bundles)
+#   warden-security[desktop]  pywebview          (v7 native dashboard window)

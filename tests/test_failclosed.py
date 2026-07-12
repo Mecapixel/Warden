@@ -8,12 +8,12 @@ pass-through, never an unhandled exception escaping to the caller.
 
 import pytest
 
-from proxy.core.request import Request
-from proxy.core.decision import Verdict
-from proxy.policy.engine import PolicyEngine
-from proxy.audit.log import AuditLog
-from proxy.runtime.mediator import Mediator
-from proxy.runtime.approval import ApprovalGate
+from warden.core.request import Request
+from warden.core.decision import Verdict
+from warden.policy.engine import PolicyEngine
+from warden.audit.log import AuditLog
+from warden.runtime.mediator import Mediator
+from warden.runtime.approval import ApprovalGate
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ class TestFailClosedRequestPath:
 
 class TestFailClosedResponsePath:
     def test_inspection_failure_withholds_output(self, mediator, monkeypatch):
-        import proxy.runtime.mediator as med
+        import warden.runtime.mediator as med
         monkeypatch.setattr(med.redactor, "redact",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
         safe, notes = mediator.mediate_response("read_file", "the actual file contents")
@@ -101,8 +101,8 @@ class TestApprovalFailClosed:
         gate = ApprovalGate()  # default asker -> /dev/tty
         monkeypatch.setattr("builtins.open",
                             lambda *a, **k: (_ for _ in ()).throw(OSError("no tty")))
-        from proxy.core.decision import Decision
-        from proxy.core.risk import RiskAssessment
+        from warden.core.decision import Decision
+        from warden.core.risk import RiskAssessment
         d = Decision.from_risk(Verdict.ESCALATE, rule="TOOL-003", action="write_file",
                                assessment=RiskAssessment(), reason="test")
         result = gate.request_approval(d)
@@ -110,8 +110,8 @@ class TestApprovalFailClosed:
 
     def test_explicit_yes_approves(self):
         gate = ApprovalGate(asker=lambda _p: "y")
-        from proxy.core.decision import Decision
-        from proxy.core.risk import RiskAssessment
+        from warden.core.decision import Decision
+        from warden.core.risk import RiskAssessment
         d = Decision.from_risk(Verdict.ESCALATE, rule="TOOL-003", action="write_file",
                                assessment=RiskAssessment(), reason="test")
         assert gate.request_approval(d).approved is True
@@ -119,16 +119,16 @@ class TestApprovalFailClosed:
     def test_anything_but_yes_denies(self):
         for answer in ("", "n", "no", "maybe", "Y E S", "approve"):
             gate = ApprovalGate(asker=lambda _p, a=answer: a)
-            from proxy.core.decision import Decision
-            from proxy.core.risk import RiskAssessment
+            from warden.core.decision import Decision
+            from warden.core.risk import RiskAssessment
             d = Decision.from_risk(Verdict.ESCALATE, rule="TOOL-003", action="x",
                                    assessment=RiskAssessment(), reason="test")
             assert gate.request_approval(d).approved is False, answer
 
     def test_timeout_sentinel_denies(self):
         gate = ApprovalGate(asker=lambda _p: None)  # None = no answer in time
-        from proxy.core.decision import Decision
-        from proxy.core.risk import RiskAssessment
+        from warden.core.decision import Decision
+        from warden.core.risk import RiskAssessment
         d = Decision.from_risk(Verdict.ESCALATE, rule="TOOL-003", action="x",
                                assessment=RiskAssessment(), reason="test")
         result = gate.request_approval(d)

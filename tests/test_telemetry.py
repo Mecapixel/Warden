@@ -13,8 +13,8 @@ import json
 
 import pytest
 
-from proxy.audit.log import AuditLog
-from proxy.audit.telemetry import snapshot, render
+from warden.audit.log import AuditLog
+from warden.audit.telemetry import snapshot, render
 
 
 @pytest.fixture
@@ -123,7 +123,7 @@ class TestTelemetrySnapshot:
 class TestTelemetryCLI:
     def test_stats_json(self, populated_log, capsys):
         path, _ = populated_log
-        from proxy.cli import build_parser
+        from warden.cli import build_parser
         args = build_parser().parse_args(["stats", "--audit", path, "--json"])
         assert args.func(args) == 0
         out = json.loads(capsys.readouterr().out)
@@ -132,7 +132,7 @@ class TestTelemetryCLI:
 
     def test_stats_table(self, populated_log, capsys):
         path, _ = populated_log
-        from proxy.cli import build_parser
+        from warden.cli import build_parser
         args = build_parser().parse_args(["stats", "--audit", path])
         assert args.func(args) == 0
         text = capsys.readouterr().out
@@ -140,7 +140,7 @@ class TestTelemetryCLI:
         assert "injection detections  1" in text
 
     def test_stats_missing_log(self, tmp_path, capsys):
-        from proxy.cli import build_parser
+        from warden.cli import build_parser
         args = build_parser().parse_args(
             ["stats", "--audit", str(tmp_path / "nope.db")])
         assert args.func(args) == 2

@@ -14,15 +14,15 @@ every test — which is the point of the design being tested.
 
 import pytest
 
-from proxy.containment.backends import (
+from warden.containment.backends import (
     BackendUnavailable, ISOLATION_ORDER, detect, select_backend,
     render, render_docker, render_wasmtime)
-from proxy.containment.sandbox import (
+from warden.containment.sandbox import (
     SandboxSpec, SpecViolation, provision, DEFAULT_IMAGE)
-from proxy.containment.ephemeral import EphemeralWorkspace
-from proxy.containment.quotas import Quotas, QuotaError, Deadline
-from proxy.containment.procmon import ProcessMonitor, ProcInfo
-from proxy.policy.engine import PolicyEngine, PolicyValidationError
+from warden.containment.ephemeral import EphemeralWorkspace
+from warden.containment.quotas import Quotas, QuotaError, Deadline
+from warden.containment.procmon import ProcessMonitor, ProcInfo
+from warden.policy.engine import PolicyEngine, PolicyValidationError
 
 
 NONE_AVAILABLE = {"docker": False, "gvisor": False, "wasmtime": False}
@@ -467,10 +467,10 @@ class TestPolicyValidation:
 # ---------------------------------------------------------------------------
 class TestTransportIntegration:
     def test_proxy_spawns_the_sandbox_argv(self, tmp_path):
-        from proxy.audit.log import AuditLog
-        from proxy.runtime.mediator import Mediator
-        from proxy.runtime.approval import ApprovalGate
-        from proxy.transport.mcp import MCPProxy
+        from warden.audit.log import AuditLog
+        from warden.runtime.mediator import Mediator
+        from warden.runtime.approval import ApprovalGate
+        from warden.transport.mcp import MCPProxy
 
         policy = tmp_path / "policy.yaml"
         policy.write_text(
@@ -483,10 +483,10 @@ class TestTransportIntegration:
 
         p = provision(["python", "srv.py"], cfg={}, workspace=str(tmp_path),
                       detector=lambda: dict(ALL_AVAILABLE))
-        proxy = MCPProxy(med, ["python", "srv.py"], sandbox=p)
+        wproxy = MCPProxy(med, ["python", "srv.py"], sandbox=p)
 
-        assert proxy.server_cmd == p.argv          # the sandbox IS the spawn
-        assert proxy.server_cmd[:2] == ["docker", "run"]
+        assert wproxy.server_cmd == p.argv          # the sandbox IS the spawn
+        assert wproxy.server_cmd[:2] == ["docker", "run"]
 
         rows = list(audit._conn.execute(
             "SELECT decision, detail FROM audit WHERE decision = 'SANDBOX_PROVISIONED'"))
@@ -494,10 +494,10 @@ class TestTransportIntegration:
         audit.close()
 
     def test_proxy_without_sandbox_unchanged(self, tmp_path):
-        from proxy.audit.log import AuditLog
-        from proxy.runtime.mediator import Mediator
-        from proxy.runtime.approval import ApprovalGate
-        from proxy.transport.mcp import MCPProxy
+        from warden.audit.log import AuditLog
+        from warden.runtime.mediator import Mediator
+        from warden.runtime.approval import ApprovalGate
+        from warden.transport.mcp import MCPProxy
 
         policy = tmp_path / "policy.yaml"
         policy.write_text(
@@ -507,6 +507,6 @@ class TestTransportIntegration:
         engine = PolicyEngine(str(policy))
         audit = AuditLog(str(tmp_path / "audit.db"))
         med = Mediator(engine, audit, approval=ApprovalGate(asker=lambda _: "n"))
-        proxy = MCPProxy(med, ["python", "srv.py"])
-        assert proxy.server_cmd == ["python", "srv.py"]
+        wproxy = MCPProxy(med, ["python", "srv.py"])
+        assert wproxy.server_cmd == ["python", "srv.py"]
         audit.close()

@@ -18,20 +18,20 @@ import time
 
 import pytest
 
-from proxy.core.request import Request
-from proxy.core.decision import Verdict
-from proxy.policy.engine import PolicyEngine, PolicyValidationError
-from proxy.audit.log import AuditLog
-from proxy.runtime.mediator import Mediator
-from proxy.runtime.approval import (
+from warden.core.request import Request
+from warden.core.decision import Verdict
+from warden.policy.engine import PolicyEngine, PolicyValidationError
+from warden.audit.log import AuditLog
+from warden.runtime.mediator import Mediator
+from warden.runtime.approval import (
     ApprovalGate, ApprovalHistory, ApprovalPolicies, ApprovalPolicyError,
     ApprovalResult, EscalatingApprovalGate)
 
-from proxy.identity.capabilities import (
+from warden.identity.capabilities import (
     CapabilityIssuer, CapabilitySet, capability_matches, target_matches)
-from proxy.identity.rbac import Rbac
-from proxy.identity.sessions import SecureSession, SessionManager
-from proxy.identity.memguard import MemoryVault, MemoryIntegrityError
+from warden.identity.rbac import Rbac
+from warden.identity.sessions import SecureSession, SessionManager
+from warden.identity.memguard import MemoryVault, MemoryIntegrityError
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +332,7 @@ class TestEscalationChain:
 # ---------------------------------------------------------------------------
 class TestSessions:
     def test_open_provisions_workspace_grants_and_canaries(self, tmp_path):
-        from proxy.network.canary import CanaryVault
+        from warden.network.canary import CanaryVault
         canary = CanaryVault(str(tmp_path / "canaries.json"))
         mgr = SessionManager(str(tmp_path / "sessions"), rbac=Rbac(RBAC_CFG),
                              canary=canary)
@@ -523,7 +523,7 @@ def v4(tmp_path):
     p.write_text(V4_POLICY.format(root=str(tmp_path).replace("\\", "/")))
     engine = PolicyEngine(str(p))
     audit = AuditLog(str(tmp_path / "audit.db"))
-    from proxy.runtime.approval import ApprovalGate as AG
+    from warden.runtime.approval import ApprovalGate as AG
     m = Mediator(engine, audit, approval=AG(asker=lambda _p: "y"))
     yield engine, m, tmp_path
     audit.close()
@@ -584,7 +584,7 @@ class TestV4Integration:
         # The v3 tripwire and v4 sessions meet: a marker planted at session
         # open, moving through outbound args, is a CAN-001 confirmed exfil.
         _engine, m, _ = v4
-        m.canary = __import__("proxy.network.canary", fromlist=["CanaryVault"]).CanaryVault()
+        m.canary = __import__("warden.network.canary", fromlist=["CanaryVault"]).CanaryVault()
         s = m.open_session("meca")
         token = next(iter(m.canary._tokens))
         out = m.mediate_call("read_file", {"path": f"notes-{token}.txt"}, session=s)

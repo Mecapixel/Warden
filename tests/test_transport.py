@@ -18,12 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from proxy.policy.engine import PolicyEngine
-from proxy.audit.log import AuditLog
-from proxy.core.mission import Mission
-from proxy.runtime.mediator import Mediator
-from proxy.runtime.approval import ApprovalGate
-from proxy.transport.mcp import MCPInterceptor, _safe_error_result
+from warden.policy.engine import PolicyEngine
+from warden.audit.log import AuditLog
+from warden.core.mission import Mission
+from warden.runtime.mediator import Mediator
+from warden.runtime.approval import ApprovalGate
+from warden.transport.mcp import MCPInterceptor, _safe_error_result
 
 FAKE_SERVER = Path(__file__).parent / "fake_mcp_server.py"
 
@@ -174,7 +174,7 @@ async def _e2e(tmp_path) -> dict:
     )
     # Drive `warden run` as a subprocess: scripted client -> proxy -> fake server.
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "proxy.cli", "--policy", str(policy),
+        sys.executable, "-m", "warden.cli", "--policy", str(policy),
         "run", "--audit", str(tmp_path / "audit.db"), "--",
         sys.executable, str(FAKE_SERVER),
         stdin=asyncio.subprocess.PIPE,

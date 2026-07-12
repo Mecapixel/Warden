@@ -15,8 +15,8 @@ optional dependency by design); the fail-loud policy test runs everywhere.
 
 import pytest
 
-from proxy.inspect import presidio_backend, redactor
-from proxy.policy.engine import PolicyEngine, PolicyValidationError
+from warden.inspect import presidio_backend, redactor
+from warden.policy.engine import PolicyEngine, PolicyValidationError
 
 _ok, _why = presidio_backend.available()
 needs_presidio = pytest.mark.skipif(

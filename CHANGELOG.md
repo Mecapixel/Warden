@@ -3,6 +3,98 @@
 All notable changes to Warden are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [7.0.0] — 2026-07-11
+
+**v7 — Warden Platform.** Warden stops being a repo and becomes something
+people install. `pip install warden-security` gives you the `warden` command;
+signed, attested releases give you a supply chain worthy of a security tool;
+framework adapters put the same policy gate inside OpenAI Agents SDK,
+LangChain, AutoGen, and CrewAI agents; a localhost dashboard (and desktop
+window) puts the audit chain, telemetry, sessions, and the v6 replay engine
+on one screen; and signed policy bundles make policies shareable with the
+same pinning discipline as tool definitions. 34 new tests.
+
+### Changed — BREAKING
+- The import package is renamed `proxy` -> `warden`. Every `from proxy.x
+  import y` becomes `from warden.x import y`; the module CLI is now
+  `python -m warden.cli`. Rationale: "pip install warden-security, import
+  proxy" was wrong, and the `proxy` name collides with the established
+  `proxy.py` project on PyPI. This is the one breaking change productization
+  demanded, made once, at the major version where it belongs. No behavior
+  changed: the full pre-rename suite passes unmodified against the renamed
+  package.
+
+### Added
+- **Packaging** (`pyproject.toml`): distribution `warden-security` (the name
+  `warden` is taken on PyPI by an unrelated project), import package
+  `warden`, console script `warden`. Runtime dependencies remain exactly
+  PyYAML — the stdlib-first posture is now enforced by the package metadata,
+  not just convention. Optional extras opt IN to capability: `[pii]`
+  (Presidio), `[sign]` (Ed25519 bundle signing via cryptography),
+  `[desktop]` (pywebview window), `[dev]`. Verified end to end: wheel built,
+  installed into a clean venv, `warden --version` / `init` / `inspect` all
+  exercised through the installed package.
+- **Signed releases + pinned dependencies**: `requirements.lock` pins the
+  exact tested versions (every line `==`, asserted by test); CI installs
+  from the lock. `.github/workflows/release.yml` builds sdist, wheel, and
+  per-OS PyInstaller binaries (Linux/macOS/Windows) on every version tag,
+  generates SHA256SUMS, and attaches Sigstore provenance attestations via
+  GitHub's `attest-build-provenance` — verifiable with `gh attestation
+  verify`. A security tool with an unsigned supply chain undermines its own
+  premise.
+- `warden/adapters/`: **framework adapters.** One in-process gate
+  (`WardenGate`) runs the same Normalize -> Policy -> Approve -> Execute ->
+  Audit pipeline at the callable boundary that the MCP transport enforces at
+  the protocol boundary: DENY means the tool is never invoked
+  (`WardenDenied` carries the full Decision), ESCALATE routes to the
+  ApprovalGate and fails closed in headless contexts, path canonicalization
+  is applied before execution (checked path == executed path), and every
+  call writes the audit chain before control returns. Duck-typed entry
+  points — `guard_openai_tools`, `guard_langchain_tools`,
+  `guard_autogen_map`, `guard_crewai_tools` — add ZERO framework
+  dependencies; an unrecognized tool shape raises `AdapterShapeError` rather
+  than passing anything through unguarded, and originals are never mutated.
+  Anthropic MCP needs no adapter: the transport (`warden run`) is the MCP
+  adapter.
+- `warden/platform/bundle.py`: **policy bundles — the marketplace format.**
+  A `.wpb` is a ZIP whose MANIFEST.json pins every member by SHA-256, with
+  an optional Ed25519 detached signature over the canonical manifest bytes
+  (tool-definition pinning, applied to policy distribution). Laws: unsigned
+  is untrusted (`install` refuses without an explicit `--allow-unsigned`;
+  a signed bundle without a key to check it is also refused); verify before
+  extract (hashes, undeclared/missing members, and path traversal are all
+  checked before a single byte is written — no partial installs); missing
+  crypto fails loud (`SigningUnavailable`, never silent unsigned
+  degradation). Policies are validated with the real PolicyEngine at pack
+  time. CLI: `warden bundle keygen | pack | verify | install`.
+- `warden/platform/dashboard.py`: **web dashboard + desktop app.** Stdlib
+  http.server (a dashboard that added a web framework would invert the
+  runtime's own supply-chain posture), hard-bound to 127.0.0.1 with no
+  override flag, per-run token (secrets.token_urlsafe) required on every
+  request and compared with hmac.compare_digest. Read-only over live state:
+  audit records with chain verification status, telemetry, per-principal
+  session aggregation, and the live policy; its two POST endpoints evaluate
+  CANDIDATE policy text in memory — validate, and replay against the
+  recorded corpus via the v6 ReplayEngine — with the live policy untouched
+  (asserted by test). One embedded HTML page, zero external requests.
+  `warden dashboard` serves it; `warden desktop` opens the same server in a
+  pywebview window or the default browser.
+- `integrations/vscode/`: **VS Code extension (preview, shipped as
+  source).** Live policy decisions while developing agents: an Inspect Tool
+  Call command showing verdict/rule/risk, audit stats in the editor, and
+  automatic revalidation of the policy file on save reflected in the status
+  bar. The extension holds no policy logic — every evaluation shells out to
+  the same `warden` CLI, so the editor shows exactly what the runtime will
+  decide.
+- `warden/__init__.py` now carries `__version__`; `warden --version` reports
+  it, and a test asserts the version is identical in the package, pyproject,
+  CHANGELOG, and VS Code extension manifest.
+
+### Fixed
+- CI now installs from `requirements.lock` (exact pins) instead of the loose
+  `requirements.txt`, so the badge attests the versions a release actually
+  shipped against.
+
 ## [6.0.0] — 2026-07-11
 
 **v6 — Adaptive Security.** Learn behavior, reason over relationships,
@@ -16,7 +108,7 @@ policy floor. Learned state never overrides a hard control (the v3
 reputation-precedence lesson, applied to everything that learns).
 
 ### Added
-- `proxy/adaptive/behavior.py`: per-agent behavioral baselines. Learns each
+- `warden/adaptive/behavior.py`: per-agent behavioral baselines. Learns each
   agent's normal tool set, egress host classes, and risk ceiling, then flags
   deviation — an unfamiliar tool (ANOM-001), egress to a host class never
   seen (ANOM-002), a risk spike past the agent's historical ceiling
@@ -27,7 +119,7 @@ reputation-precedence lesson, applied to everything that learns).
   suspicion while still judging against its pre-freeze baseline); the output
   is POINTS, never a verdict (deviation is not guilt); and every anomaly
   names the dimension and the baseline it broke.
-- `proxy/adaptive/trustgraph.py`: reason over the whole chain — user → agent
+- `warden/adaptive/trustgraph.py`: reason over the whole chain — user → agent
   → tool → file → network — for the properties no per-call guard can see.
   Taint reachability (TG-001) is the read-then-exfiltrate detector: an
   untrusted source reaching an egress sink along ANY path, cycle-safe and
@@ -37,7 +129,7 @@ reputation-precedence lesson, applied to everything that learns).
   can't see. Blast radius (TG-003) scopes quarantine when something trips.
   Edges carry the audit event_id that created them: the graph is a lens over
   the tamper-evident log, never a second source of truth.
-- `proxy/adaptive/replay.py`: replay a recorded audit corpus against a
+- `warden/adaptive/replay.py`: replay a recorded audit corpus against a
   candidate policy and answer "what would this have done to the traffic we
   actually saw?" — regression safety (how many allowed calls the candidate
   would now gate: `would_break_count`, the rollout-risk number) and coverage
@@ -46,7 +138,7 @@ reputation-precedence lesson, applied to everything that learns).
   (reconstructs Requests from audit detail, re-decides against a candidate
   engine, never executes a tool or writes a chain). Records it can't
   reconstruct are SKIPPED and counted, never fabricated.
-- `proxy/adaptive/policy.py`: three tighten-only controls. Adaptive context
+- `warden/adaptive/policy.py`: three tighten-only controls. Adaptive context
   floors (ADAPT-001) enforce the same rule more strictly in a riskier
   context; a floor can only raise a verdict, and a rule that tried to
   downgrade a DENY is refused (ADAPT-002). Quarantine (QUAR-001) is sticky —
@@ -58,7 +150,7 @@ reputation-precedence lesson, applied to everything that learns).
   the session's stated goal — the "you asked me to summarize but I'm now
   deleting" catch — as an escalate hint, conservative by design so false
   off-goal alarms don't train humans to ignore the signal.
-- `proxy/audit/log.py`: a read-only `records()` reader so the replay engine
+- `warden/audit/log.py`: a read-only `records()` reader so the replay engine
   can consume the monitor-mode corpus without ever touching the chain it
   reads; reading is proven not to mutate the chain by test.
 - Policy validation rejects malformed `adaptive:` config at load (a context
@@ -81,7 +173,7 @@ tables — no Docker daemon, overlay mount, or /proc required, which is
 itself the property being tested.
 
 ### Added
-- `proxy/containment/backends.py`: the isolation ladder — Docker (namespace
+- `warden/containment/backends.py`: the isolation ladder — Docker (namespace
   /cgroup isolation, shared kernel) → gVisor (userspace kernel, syscalls
   never reach the host directly) → Wasmtime (no ambient kernel, filesystem,
   or network to escape into; workload must be a wasm module, and
@@ -89,27 +181,27 @@ itself the property being tested.
   Detection probes through an injectable runner; selection is
   required-or-STRONGER, never weaker — a host that cannot provide the
   required rung is SBX-001 at provision time, not a quiet fallback.
-- `proxy/containment/sandbox.py`: provisioning with a non-negotiable floor.
+- `warden/containment/sandbox.py`: provisioning with a non-negotiable floor.
   Every spec has network `none` (outbound access goes through the v3 egress
   battery at the proxy — the sandbox is not a second network path),
   read-only rootfs, cap-drop ALL, no-new-privileges, and a size-capped
   noexec/nosuid tmpfs; any attempt to construct a spec below the floor is
   SBX-002 by construction — there is no code path that produces an open
   spec. Rendering produces argv as data; nothing in the package executes.
-- `proxy/containment/ephemeral.py`: the writable surface dies with the run.
+- `warden/containment/ephemeral.py`: the writable surface dies with the run.
   Overlay mode renders a Linux OverlayFS spec (read-only lower layer,
   provably untouched because overlay never writes to it); staging mode
   works everywhere else and the audit record names which mode was in play
   — recorded, never blurred. Destruction is VERIFIED: destroy() re-checks
   the tree, and survivors are an EPH-001 violation with every survivor
   named, treated as a persistence attempt until proven otherwise.
-- `proxy/containment/quotas.py`: CPU / memory / disk / pids / wall clock.
+- `warden/containment/quotas.py`: CPU / memory / disk / pids / wall clock.
   Validated positive at load — a zero, negative, or MISSPELLED quota is a
   startup policy error, never a silent "unlimited". Docker rendering pins
   swap equal to memory so the cap has no overflow valve; the wall-clock
   Deadline is held by Warden with an injectable clock, because a wedged
   workload does not get a vote on whether it has timed out (QUO-001).
-- `proxy/containment/procmon.py`: what the workload DOES with its process
+- `warden/containment/procmon.py`: what the workload DOES with its process
   table — fork breaches counted through the whole descendant tree so
   forking through an intermediary doesn't launder the count (PROC-001),
   zombie accumulation with zero tolerance by default (PROC-002), overstay
@@ -138,7 +230,7 @@ identity layer around it. Absent an `identity:` block in policy, every new
 control is inert and v1–v3 behavior is unchanged. 64 new tests.
 
 ### Added
-- `proxy/identity/rbac.py`: agent RBAC — the invoking user's role
+- `warden/identity/rbac.py`: agent RBAC — the invoking user's role
   INTERSECTED with the agent deployment's scope, the same narrow-never-
   widen law as v3 egress scopes. Unknown users have no role and no role
   means no tools (RBAC-001) unless the operator deliberately opts into
@@ -146,7 +238,7 @@ control is inert and v1–v3 behavior is unchanged. 64 new tests.
   the deployment scope excludes is RBAC-002. An empty declared scope means
   the agent may run nothing — the distinction from "no scope declared" is
   preserved.
-- `proxy/identity/capabilities.py`: capability tokens — per-request,
+- `warden/identity/capabilities.py`: capability tokens — per-request,
   HMAC-SHA256-signed, scoped grants (`filesystem.read` on
   `/workspace/data/*`, `network.egress` on a host) minted by a per-session
   issuer whose key exists only in memory. Unforgeable (one flipped byte
@@ -156,7 +248,7 @@ control is inert and v1–v3 behavior is unchanged. 64 new tests.
   it. The engine checks grants against the CANONICAL target — the path
   after canonicalization, the host after extraction — so a grant cannot
   be stretched with `..` games or URL dressing.
-- `proxy/runtime/approval.py` generalized: per-capability approval
+- `warden/runtime/approval.py` generalized: per-capability approval
   policies (`always`, `risk>=N`; `never` is deliberately inert — the
   approval layer only ADDS requirements and can never lower a tier),
   forcing ESCALATE via APR-001; ApprovalHistory as a read-only view over
@@ -166,13 +258,13 @@ control is inert and v1–v3 behavior is unchanged. 64 new tests.
   escalation chain of askers for ABSENCE, never for overruling — an
   explicit human "no" stops the chain, only non-answers move to the next
   approver.
-- `proxy/identity/sessions.py`: secure sessions — per-session workspace,
+- `warden/identity/sessions.py`: secure sessions — per-session workspace,
   the role's grants minted as signed tokens at open, v3 canary decoys
   planted automatically, open/close events on the main hash chain.
   `destroy()` revokes the issuer FIRST and then wipes the workspace, so
   even a failed wipe cannot leave a usable token behind; a closed session
   refuses everything, not as policy but because the key no longer exists.
-- `proxy/identity/memguard.py`: memory integrity — append-only,
+- `warden/identity/memguard.py`: memory integrity — append-only,
   HMAC-signed, hash-chained, versioned agent memory with a signed head
   file pinning chain length and tip. Tamper, reorder, insertion, and
   mid-store deletion are MEM-001; truncation/rollback against the pinned
@@ -220,43 +312,43 @@ The entire subsystem runs against injectable resolvers: 90 new tests,
 zero real network I/O.
 
 ### Added
-- `proxy/network/guard.py`: the ordered battery. Per-tool egress scopes
+- `warden/network/guard.py`: the ordered battery. Per-tool egress scopes
   NARROW the global allowlist and can never widen it; sinkhole outranks
   allowlist so a configuration conflict resolves to the safe answer.
-- `proxy/network/addrguard.py`: SSRF address classification. Cloud
+- `warden/network/addrguard.py`: SSRF address classification. Cloud
   metadata endpoints (AWS/Azure/GCP/OpenStack, Alibaba, Oracle) are
   forbidden unconditionally; IPv4-mapped IPv6 is unwrapped so `::ffff:`
   dressing cannot slip a private v4 address past a v4-only check;
   loopback / link-local / private are policy-controlled and default to
   blocked. Invalid input classifies as a violation, never a pass.
-- `proxy/network/dnspin.py`: resolve-then-validate with pinning. Every
+- `warden/network/dnspin.py`: resolve-then-validate with pinning. Every
   address in a DNS answer is validated — one bad address poisons the
   whole answer. A public-to-forbidden flip on a host that previously
   resolved clean is attributed as a DNS-rebinding signature (SSRF-002)
   distinct from an always-internal host (SSRF-001); pins expire so stale
   memory cannot mislabel. Resolution failure fails closed. The residual
   proxy-not-socket-owner TOCTOU window is documented, not papered over.
-- `proxy/network/httpguard.py`: every redirect hop is a fresh network
+- `warden/network/httpguard.py`: every redirect hop is a fresh network
   decision through the identical battery (HTTP-002), with a hop cap
   (HTTP-001); declared Content-Length and MIME type are the cheap early
   wall on the response side (HTTP-003/004) — declared headers can lie,
   which is why the download guard re-measures the actual payload.
-- `proxy/network/downloads.py`: download guard — oversize (DL-001),
+- `warden/network/downloads.py`: download guard — oversize (DL-001),
   executable magic bytes for PE/ELF/Mach-O (DL-002), zip bombs by
   declared expansion and compression ratio WITHOUT inflating the payload
   (DL-003), nested-archive depth and encrypted members (DL-004). Text
   payloads are judged on raw bytes AND any base64-decoded form, so a
   binary dressed as text is judged by what it decodes to.
-- `proxy/network/reputation.py`: known-good / known-bad / unknown with
+- `warden/network/reputation.py`: known-good / known-bad / unknown with
   TTL'd runtime cache and JSON persistence. known_bad denies even an
   allowlisted host; precedence bad > good > cache > unknown, so a host on
   both lists resolves to the safe answer. No third-party API calls — a
   gateway that phones home on every decision has added a trust boundary.
-- `proxy/network/ratelimit.py`: in-process token buckets, global and
+- `warden/network/ratelimit.py`: in-process token buckets, global and
   per-tool (RATE-001). A call must clear BOTH; the tool bucket is checked
   first so a noisy tool exhausts its own budget before starving quiet
   tools. Injectable clock; no Redis until multi-node is real.
-- `proxy/network/canary.py`: canary tokens (CAN-001, risk 100) — the only
+- `warden/network/canary.py`: canary tokens (CAN-001, risk 100) — the only
   detector permitted to claim certainty, because its false-positive cost
   is structurally zero. `seed_workspace()` plants labeled decoys (.env,
   SSH-key-shaped, notes) whose fake values embed the marker, so partial
@@ -291,23 +383,23 @@ attack corpus, miss rates published per class. Unmeasured detection is
 unaccountable detection.
 
 ### Added
-- `proxy/inspect/threats.py`: expanded detectors — role confusion (fake
+- `warden/inspect/threats.py`: expanded detectors — role confusion (fake
   system/assistant turns, chat-template tokens), jailbreak scaffolds
   (DAN, developer-mode, "hypothetically"), hidden Unicode (Tags block,
   private-use, bidi override, invisible-character density), markup/HTML
   smuggling, and context-window abuse (oversized payloads, token flooding,
   excessive entropy). All emit the same `InjectionSignal` shape the v1
   inspector uses, so mediator/audit/policy need no changes.
-- `proxy/inspect/schema.py`: JSON-Schema validation of tool CALLS and tool
+- `warden/inspect/schema.py`: JSON-Schema validation of tool CALLS and tool
   OUTPUTS. A `args_schema` declared on a tool means a call with the wrong
   structure is denied (rule SCHEMA-001) — deny-by-default stops unknown
   tools; this stops known tools invoked with a malformed shape. Dependency-
   free built-in validator covers the practical subset; the optional
   `jsonschema` package is used automatically if installed, never required.
-- `proxy/inspect/evaluate.py` + `tests/corpus/attacks.py`: the measured
+- `warden/inspect/evaluate.py` + `tests/corpus/attacks.py`: the measured
   posture harness. Runs every detector against 28 labeled synthetic attacks
   across six classes plus 10 benign decoys, reporting per-class recall, miss
-  rate, and false positives. `python -m proxy.inspect.evaluate`.
+  rate, and false positives. `python -m warden.inspect.evaluate`.
 - `docs/DETECTION_POSTURE.md`: published reference numbers and methodology —
   100% recall on the corpus, 0 false positives — with an explicit statement
   of what the measurement does and does not claim.
@@ -326,7 +418,7 @@ unaccountable detection.
 Optional Presidio detector backend — v1.5 phase complete.
 
 ### Added
-- `proxy/inspect/presidio_backend.py`: opt-in adapter for richer PII
+- `warden/inspect/presidio_backend.py`: opt-in adapter for richer PII
   detection (emails, phone numbers, national IDs, credit cards, IPs) behind
   the existing detector interface. Findings arrive in the same `Finding`
   shape with namespaced names (`presidio_email_address`, ...), so
@@ -380,7 +472,7 @@ second bookkeeping system that could disagree with the tamper-evident record.
 The log IS the source of truth; telemetry is a strictly read-only view.
 
 ### Added
-- `proxy/audit/telemetry.py`: derives, from the audit log alone —
+- `warden/audit/telemetry.py`: derives, from the audit log alone —
   allow/deny/escalate counts (normalized across writers), decisions by tool,
   highest-risk tools (average and max risk per tool), rule frequency,
   watchdog timeouts, injection detections, traversal attempts, secret

@@ -29,9 +29,9 @@ import unicodedata
 
 from hypothesis import given, settings, strategies as st
 
-from proxy.core.textnorm import harden, _INVISIBLES, _HOMOGLYPHS
-from proxy.core.request import Request
-from proxy.transport.mcp import parse_jsonrpc_line
+from warden.core.textnorm import harden, _INVISIBLES, _HOMOGLYPHS
+from warden.core.request import Request
+from warden.transport.mcp import parse_jsonrpc_line
 
 
 # ---------------------------------------------------------------------------

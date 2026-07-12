@@ -6,8 +6,8 @@ labeled corpus of synthetic attacks and benign decoys, with miss rates
 reported per attack class. Reproduce anytime:
 
 ```bash
-python -m proxy.inspect.evaluate           # table
-python -m proxy.inspect.evaluate --json    # machine-readable
+python -m warden.inspect.evaluate           # table
+python -m warden.inspect.evaluate --json    # machine-readable
 ```
 
 ## Reference run (v2)

@@ -9,12 +9,12 @@ synthetic corpus. Every payload is synthetic and benign.
 
 import pytest
 
-from proxy.inspect import threats, inbound
-from proxy.inspect.schema import (
+from warden.inspect import threats, inbound
+from warden.inspect.schema import (
     check_tool_call, check_output, validate, SchemaViolation)
-from proxy.inspect.evaluate import evaluate
-from proxy.core.request import Request
-from proxy.policy.engine import PolicyEngine
+from warden.inspect.evaluate import evaluate
+from warden.core.request import Request
+from warden.policy.engine import PolicyEngine
 from tests.corpus.attacks import ATTACKS, BENIGN
 
 

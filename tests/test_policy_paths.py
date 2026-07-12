@@ -21,9 +21,9 @@ default policy was unreadable on Windows. Contract pinned here:
 import yaml
 import pytest
 
-from proxy.audit.log import AuditLog
-from proxy.cli import _DENY_ALL_POLICY, _STARTER_POLICY, build_parser
-from proxy.policy.engine import PolicyEngine, PolicyValidationError
+from warden.audit.log import AuditLog
+from warden.cli import _DENY_ALL_POLICY, _STARTER_POLICY, build_parser
+from warden.policy.engine import PolicyEngine, PolicyValidationError
 
 
 WINDOWS_STYLE_PATHS = [

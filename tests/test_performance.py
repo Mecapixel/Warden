@@ -16,10 +16,10 @@ import time
 
 import pytest
 
-from proxy.audit.log import AuditLog
-from proxy.core.request import Request
-from proxy.policy.engine import PolicyEngine
-from proxy.runtime.mediator import Mediator
+from warden.audit.log import AuditLog
+from warden.core.request import Request
+from warden.policy.engine import PolicyEngine
+from warden.runtime.mediator import Mediator
 
 
 N = 300

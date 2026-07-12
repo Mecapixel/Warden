@@ -8,10 +8,10 @@ that every decision carries a rule id, a risk score, contributors, and a fix.
 
 import pytest
 
-from proxy.core.request import Request
-from proxy.core.risk import RiskAssessment, RISK_WEIGHTS
-from proxy.core.decision import Decision, Verdict
-from proxy.policy.engine import PolicyEngine
+from warden.core.request import Request
+from warden.core.risk import RiskAssessment, RISK_WEIGHTS
+from warden.core.decision import Decision, Verdict
+from warden.policy.engine import PolicyEngine
 
 
 # ---------------------------------------------------------------------------

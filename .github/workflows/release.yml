@@ -1,0 +1,70 @@
+# Release pipeline: on a version tag, build the sdist/wheel and per-OS
+# binaries, hash everything, attest provenance (Sigstore, via GitHub's
+# attest-build-provenance), and attach it all to a GitHub Release.
+# A security tool with an unsigned supply chain undermines its own premise.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write        # create the release
+  id-token: write        # sign attestations (Sigstore OIDC)
+  attestations: write    # store attestations
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: Attest provenance (sdist + wheel)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/*
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/* }
+
+  build-binaries:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.lock pyinstaller
+      - run: pyinstaller --onefile --name warden packaging/entry.py
+      - name: Attest provenance (binary)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/warden*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warden-${{ matrix.os }}
+          path: dist/warden*
+
+  release:
+    needs: [build-dist, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, merge-multiple: false }
+      - name: Stage and hash artifacts
+        run: |
+          mkdir out
+          cp artifacts/dist/* out/
+          cp artifacts/warden-ubuntu-latest/warden       out/warden-linux-x86_64 || true
+          cp artifacts/warden-macos-latest/warden        out/warden-macos        || true
+          cp artifacts/warden-windows-latest/warden.exe  out/warden-windows.exe  || true
+          cd out && sha256sum * > SHA256SUMS
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true

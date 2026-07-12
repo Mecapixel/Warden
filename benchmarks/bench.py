@@ -34,10 +34,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from proxy.core.request import Request
-from proxy.policy.engine import PolicyEngine
-from proxy.audit.log import AuditLog
-from proxy.runtime.mediator import Mediator
+from warden.core.request import Request
+from warden.policy.engine import PolicyEngine
+from warden.audit.log import AuditLog
+from warden.runtime.mediator import Mediator
 
 N = 2000            # iterations per micro-stage
 N_TRANSPORT = 60    # round trips through the live proxy
@@ -103,8 +103,8 @@ def bench_transport(tmp: Path) -> dict | None:
     issue N_TRANSPORT tools/call round trips, time them. Skipped (returns
     None) if the sandbox can't spawn subprocesses."""
     import asyncio
-    from proxy.transport.mcp import MCPProxy, parse_jsonrpc_line
-    from proxy.core.mission import Mission
+    from warden.transport.mcp import MCPProxy, parse_jsonrpc_line
+    from warden.core.mission import Mission
 
     engine = _make_engine(tmp)
     audit = AuditLog(str(tmp / "bench_transport_audit.db"))
@@ -142,9 +142,9 @@ def bench_transport(tmp: Path) -> dict | None:
 
         # Mediated path: client -> Warden -> fake server.
         # MCPProxy relays our stdin/stdout, so run it as a subprocess of this
-        # process the same way `warden run` does: python -m proxy.cli run.
+        # process the same way `warden run` does: python -m warden.cli run.
         wproc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "proxy.cli", "--policy",
+            sys.executable, "-m", "warden.cli", "--policy",
             str(tmp / "policy.yaml"), "run", "--audit",
             str(tmp / "bench_transport_audit2.db"), "--", *fake_server,
             stdin=asyncio.subprocess.PIPE,

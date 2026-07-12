@@ -8,14 +8,14 @@ rug-pull defense. Every "attack" is a synthetic, benign definition swap.
 
 import pytest
 
-from proxy.runtime.pinning import (
+from warden.runtime.pinning import (
     ToolRegistry, PinVerdict, canonical_schema, schema_hash,
 )
-from proxy.policy.engine import PolicyEngine
-from proxy.audit.log import AuditLog
-from proxy.runtime.mediator import Mediator
-from proxy.runtime.approval import ApprovalGate
-from proxy.transport.mcp import MCPInterceptor
+from warden.policy.engine import PolicyEngine
+from warden.audit.log import AuditLog
+from warden.runtime.mediator import Mediator
+from warden.runtime.approval import ApprovalGate
+from warden.transport.mcp import MCPInterceptor
 
 
 READ_FILE = {"name": "read_file", "description": "Read a file",

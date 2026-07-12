@@ -19,21 +19,21 @@ import zipfile
 
 import pytest
 
-from proxy.core.request import Request
-from proxy.core.decision import Verdict
-from proxy.policy.engine import PolicyEngine
-from proxy.audit.log import AuditLog
-from proxy.runtime.mediator import Mediator
-from proxy.runtime.approval import ApprovalGate
+from warden.core.request import Request
+from warden.core.decision import Verdict
+from warden.policy.engine import PolicyEngine
+from warden.audit.log import AuditLog
+from warden.runtime.mediator import Mediator
+from warden.runtime.approval import ApprovalGate
 
-from proxy.network.addrguard import classify, forbidden_classes, check_ip
-from proxy.network.dnspin import (
+from warden.network.addrguard import classify, forbidden_classes, check_ip
+from warden.network.dnspin import (
     DnsPinCache, ResolutionError, host_sinkholed, resolve_and_validate)
-from proxy.network.guard import NetworkGuard
-from proxy.network.reputation import ReputationCache
-from proxy.network.ratelimit import TokenBucket, RateLimiter
-from proxy.network.canary import CanaryVault
-from proxy.network import downloads, httpguard
+from warden.network.guard import NetworkGuard
+from warden.network.reputation import ReputationCache
+from warden.network.ratelimit import TokenBucket, RateLimiter
+from warden.network.canary import CanaryVault
+from warden.network import downloads, httpguard
 
 
 # ---------------------------------------------------------------------------
@@ -754,20 +754,20 @@ class TestPolicyValidation:
         return PolicyEngine(str(p))
 
     def test_bad_unknown_action_rejected(self, tmp_path):
-        from proxy.policy.engine import PolicyValidationError
+        from warden.policy.engine import PolicyValidationError
         with pytest.raises(PolicyValidationError):
             self._load(tmp_path,
                        "network:\n  reputation: {enabled: true, unknown_action: maybe}\n")
 
     def test_bad_rate_limit_numbers_rejected(self, tmp_path):
-        from proxy.policy.engine import PolicyValidationError
+        from warden.policy.engine import PolicyValidationError
         with pytest.raises(PolicyValidationError):
             self._load(tmp_path,
                        "network:\n  rate_limit:\n    enabled: true\n"
                        "    global: {capacity: -5, refill_per_second: 1}\n")
 
     def test_bad_sinkhole_type_rejected(self, tmp_path):
-        from proxy.policy.engine import PolicyValidationError
+        from warden.policy.engine import PolicyValidationError
         with pytest.raises(PolicyValidationError):
             self._load(tmp_path, "network:\n  dns: {sinkhole: 'not-a-list'}\n")
 

@@ -15,13 +15,13 @@ import sys
 
 import pytest
 
-from proxy.guards.canonicalize import canonicalize_within, PathTraversalError
-from proxy.guards.safe_exec import screen_arguments, run_parameterized, UnsafeArgumentError
-from proxy.inspect import redactor, inbound
-from proxy.policy.engine import PolicyEngine
-from proxy.core.request import Request
-from proxy.core.decision import Verdict
-from proxy.audit.log import AuditLog
+from warden.guards.canonicalize import canonicalize_within, PathTraversalError
+from warden.guards.safe_exec import screen_arguments, run_parameterized, UnsafeArgumentError
+from warden.inspect import redactor, inbound
+from warden.policy.engine import PolicyEngine
+from warden.core.request import Request
+from warden.core.decision import Verdict
+from warden.audit.log import AuditLog
 
 
 # ---------------------------------------------------------------------------
